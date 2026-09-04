@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 from urllib.parse import unquote, urlparse
-from sqlalchemy import DDL, event, create_engine, Column, String, Text, Boolean, DateTime, Integer, ForeignKey, JSON, Index, func, inspect, text
+from sqlalchemy import DDL, event, create_engine, Column, String, Text, Boolean, DateTime, Float, Integer, ForeignKey, JSON, Index, func, inspect, text
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.ext.declarative import declarative_base, declared_attr
@@ -864,6 +864,41 @@ class Memory(Base):
         Index('ix_memories_lookup', 'category', 'timestamp'),  # Composite for category-based queries
         Index('ix_memories_session', 'session_id', 'timestamp'),  # Composite for session-based queries
     )
+
+
+class BenchSample(Base):
+    """Read-only ModelBench raw-sample target table.
+
+    Holds raw per-request samples from ModelBench benchmark runs, one row
+    per request. Percentiles and other aggregates are recomputed at read
+    time from these rows and are never pre-aggregated or stored here.
+    """
+    __tablename__ = "bench_samples"
+
+    run_id = Column(String(64), primary_key=True, index=True)
+    model_tag = Column(String(255), nullable=False)
+    true_params = Column(Float, nullable=False)
+    quant = Column(String(32), nullable=True)
+    ctx_len = Column(Integer, nullable=True)
+    think = Column(Boolean, nullable=False)
+    prompt_bytes = Column(Integer, nullable=True)
+    temperature = Column(Float, nullable=True)
+    seed = Column(Integer, nullable=True)
+    ollama_version = Column(String(32), nullable=True)
+    vrram_fit = Column(String(16), nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    thinking_tokens = Column(Integer, nullable=True)
+    content_tokens = Column(Integer, nullable=True)
+    tokens_per_sec = Column(Float, nullable=True)
+    ttft_ms = Column(Float, nullable=True)
+    latency_ms = Column(Float, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=lambda: utcnow_naive())
+
+    __table_args__ = (
+        Index('ix_bench_samples_model_tag', 'model_tag'),
+        Index('ix_bench_samples_think', 'think'),
+    )
+
 
 def _migrate_add_last_message_at_column():
     """Add last_message_at to sessions + backfill from the latest message
