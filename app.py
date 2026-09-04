@@ -814,6 +814,10 @@ app.include_router(setup_hwfit_routes())
 from routes.compare.compare_routes import setup_compare_routes
 app.include_router(setup_compare_routes(session_manager))
 
+# ModelBench read-only dashboard (measurement sibling of hwfit prediction)
+from routes.modelbench.modelbench_routes import setup_modelbench_routes
+app.include_router(setup_modelbench_routes())
+
 # User Preferences
 from routes.prefs_routes import setup_prefs_routes
 app.include_router(setup_prefs_routes())
