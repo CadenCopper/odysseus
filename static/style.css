@@ -41399,3 +41399,331 @@ body.settings-sidebar-resize-active {
     display: none;
   }
 }
+
+/* ── ModelBench dashboard (static/js/modelbench/index.js) ────────────────
+   Read-only measurement dashboard: the empirical sibling of the hwfit
+   (hardware-fit prediction) tool. Fullscreen centered panel over the app,
+   mounted directly on document.body by the module. */
+
+body.modelbench-open { overflow: hidden; }
+
+.modelbench-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-sizing: border-box;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  letter-spacing: -0.015em;
+  animation: modelbench-panel-enter 180ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
+  outline: none;
+}
+@keyframes modelbench-panel-enter {
+  from { opacity: 0; transform: scale(0.985); }
+  to   { opacity: 1; transform: scale(1); }
+}
+
+.modelbench-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.modelbench-header-left { display: flex; align-items: center; gap: 8px; }
+.modelbench-title { margin: 0; font-size: 15px; font-weight: 650; }
+.modelbench-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.modelbench-filter-label {
+  font-size: 11px;
+  opacity: 0.65;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.modelbench-controls select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.modelbench-think-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.modelbench-think-toggle button {
+  background: none;
+  border: none;
+  color: var(--fg);
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  opacity: 0.6;
+}
+.modelbench-think-toggle button.active {
+  background: color-mix(in srgb, var(--accent, var(--red)) 18%, transparent);
+  opacity: 1;
+  font-weight: 600;
+}
+.modelbench-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: none;
+  border: none;
+  color: var(--fg);
+  opacity: 0.7;
+  cursor: pointer;
+  border-radius: 5px;
+}
+.modelbench-close-btn:hover { opacity: 1; background: color-mix(in srgb, var(--red) 14%, transparent); }
+
+.modelbench-banner {
+  flex-shrink: 0;
+  margin: 10px 14px 0;
+  padding: 8px 12px;
+  background: color-mix(in srgb, var(--red) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 40%, var(--border));
+  color: var(--fg);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.modelbench-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+.modelbench-section { min-width: 0; }
+.modelbench-section-title {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 650;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.modelbench-fit-legend {
+  display: inline-flex;
+  gap: 12px;
+  font-size: 11px;
+  opacity: 0.8;
+  font-weight: 500;
+}
+.modelbench-legend-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  margin-right: 4px;
+  vertical-align: -0.5px;
+}
+
+.modelbench-loading { padding: 18px; text-align: center; opacity: 0.6; font-size: 13px; }
+.modelbench-empty { padding: 16px; text-align: center; opacity: 0.55; font-size: 13px; }
+.modelbench-error-inline { padding: 12px; color: var(--red); font-size: 13px; }
+
+.modelbench-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  margin-top: 4px;
+}
+.modelbench-table th {
+  text-align: left;
+  font-weight: 650;
+  opacity: 0.7;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.modelbench-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+  vertical-align: middle;
+}
+.modelbench-model-row,
+.modelbench-sample-row {
+  cursor: pointer;
+  outline: none;
+}
+.modelbench-model-row:hover td,
+.modelbench-sample-row:hover td {
+  background: color-mix(in srgb, var(--accent, var(--red)) 6%, transparent);
+}
+.modelbench-model-row:focus-visible td,
+.modelbench-sample-row:focus-visible td {
+  box-shadow: inset 0 0 0 1px var(--accent, var(--red));
+}
+.modelbench-row-active td {
+  background: color-mix(in srgb, var(--accent, var(--red)) 10%, transparent) !important;
+}
+.modelbench-mono { font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace; font-size: 11px; }
+
+.modelbench-fit-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border: 1px solid;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  line-height: 1.4;
+}
+
+/* Real-context vs advertised-context column (R2 cliff visibility). */
+.modelbench-ctx-cliff .modelbench-cliff-flag {
+  color: var(--red);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.03em;
+}
+.modelbench-ctx-cliff { color: var(--red); }
+.modelbench-ctx-not-swept { opacity: 0.7; font-style: italic; }
+.modelbench-ctx-ok { color: var(--green); }
+
+.modelbench-prov-ok { color: var(--green); font-size: 11px; font-weight: 600; }
+.modelbench-prov-bad { color: var(--red); font-size: 11px; font-weight: 600; }
+
+/* Metric DOM bars (native CSS — no chart library per DECISION t_a71893d3). */
+.modelbench-metric-group { margin-bottom: 16px; }
+.modelbench-metric-group-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 650;
+}
+.modelbench-metric-count { opacity: 0.55; font-weight: 500; }
+.modelbench-metric-block { margin: 4px 0 10px 8px; }
+.modelbench-metric-label {
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.modelbench-metric-meta { font-weight: 500; opacity: 0.55; font-size: 11px; }
+.modelbench-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 2px 0;
+  font-size: 11px;
+}
+.modelbench-bar-tag { width: 44px; flex-shrink: 0; opacity: 0.7; text-align: right; }
+.modelbench-bar-track {
+  flex: 1;
+  min-width: 60px;
+  height: 9px;
+  background: color-mix(in srgb, var(--border) 45%, transparent);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.modelbench-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent, var(--red)) 75%, var(--green));
+  min-width: 2px;
+}
+.modelbench-bar-value { width: 84px; flex-shrink: 0; font-family: ui-monospace, Menlo, Consolas, monospace; }
+
+.modelbench-samples-meta { font-size: 11px; opacity: 0.6; margin-bottom: 2px; }
+
+/* Drill-down provenance modal (R4). */
+.modelbench-drilldown-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 310;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+}
+.modelbench-drilldown-modal {
+  width: min(680px, 92%);
+  max-height: 86%;
+  overflow-y: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  padding: 14px 16px;
+}
+.modelbench-drilldown-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.modelbench-drilldown-header h5 { margin: 0; font-size: 14px; font-weight: 650; }
+.modelbench-drilldown-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: none;
+  border: none;
+  color: var(--fg);
+  opacity: 0.7;
+  cursor: pointer;
+  border-radius: 5px;
+}
+.modelbench-drilldown-close:hover { opacity: 1; background: color-mix(in srgb, var(--red) 14%, transparent); }
+.modelbench-drilldown-badge {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.modelbench-drilldown-badge.modelbench-prov-ok { background: color-mix(in srgb, var(--green) 14%, transparent); }
+.modelbench-drilldown-badge.modelbench-prov-bad { background: color-mix(in srgb, var(--red) 14%, transparent); }
+.modelbench-drilldown-table th {
+  width: 34%;
+  font-weight: 600;
+  opacity: 0.75;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* Rail button state reflects an open dashboard. */
+#rail-modelbench.active-section,
+#tool-modelbench-btn.active {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent, var(--red)) 15%, transparent);
+}
+
+@media (max-width: 768px) {
+  .modelbench-controls select { max-width: 120px; }
+  .modelbench-table { font-size: 11px; }
+  .modelbench-fit-badge { font-size: 9px; }
+  .modelbench-bar-value { width: 74px; }
+}

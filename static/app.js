@@ -12,6 +12,7 @@ import presetsModule from './js/presets.js';
 import searchModule from './js/search.js';
 import chatModule from './js/chat.js?v=20260819approvalcontrol1';
 import compareModule from './js/compare/index.js?v=20260819approvalcontrol1';
+import modelbenchModule from './js/modelbench/index.js?v=20260904modelbench1';
 import documentModule from './js/document.js?v=20260815approvalsave1';
 import searchChatModule from './js/search-chat.js';
 import { makeWindowDraggable } from './js/windowDrag.js';
@@ -171,6 +172,7 @@ function initRailHoverLabels() {
     'rail-documents': 'Docs',
     'rail-calendar': 'Calendar',
     'rail-compare': 'Compare',
+    'rail-modelbench': 'ModelBench',
     'rail-cookbook': 'Cookbook',
     'rail-research': 'Research',
     'rail-email': 'Email',
@@ -1005,6 +1007,19 @@ function initializeEventListeners() {
     });
   }
 
+  // ── ModelBench tool toggle ──
+  const toolModelbenchBtn = el('tool-modelbench-btn');
+  if (toolModelbenchBtn) {
+    toolModelbenchBtn.addEventListener('click', () => {
+      if (!modelbenchModule) return;
+      if (modelbenchModule.isActive()) {
+        modelbenchModule.close();
+      } else {
+        modelbenchModule.open();
+      }
+    });
+  }
+
   const toolResearchBtn = el('tool-research-btn');
   if (toolResearchBtn) {
     toolResearchBtn.addEventListener('click', () => {
@@ -1223,6 +1238,10 @@ function initializeEventListeners() {
     '/gallery':  () => document.getElementById('tool-gallery-btn')?.click(),
     '/tasks':    () => document.getElementById('tool-tasks-btn')?.click(),
     '/library':  () => sessionModule && sessionModule.openLibrary && sessionModule.openLibrary(),
+    '/modelbench': () => {
+      _collapseSidebarToRail();
+      if (modelbenchModule) modelbenchModule.open();
+    },
   };
   const _opener = _routeOpen[urlPath];
   // Defer the opener — at this point in init, the modules whose handlers we
@@ -3712,6 +3731,10 @@ function startOdysseusApp() {
   if (compareModule) {
     compareModule.init(API_BASE);
   }
+  // Initialize modelbench module
+  if (modelbenchModule) {
+    modelbenchModule.init(API_BASE);
+  }
   researchPanelModule.init(API_BASE, markdownModule, sessionModule);
   // Initialize document editor module
   if (documentModule) {
@@ -3738,6 +3761,7 @@ function startOdysseusApp() {
   // Rail tool buttons — delegate to sidebar tool buttons
   const _railToolMap = {
     'rail-compare':   'tool-compare-btn',
+    'rail-modelbench': 'tool-modelbench-btn',
     'rail-research':  'tool-research-btn',
     'rail-cookbook':   'tool-cookbook-btn',
     'rail-archive':   'tool-library-btn',

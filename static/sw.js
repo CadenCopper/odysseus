@@ -7,7 +7,7 @@
 //   - Other static assets (images/fonts/libs): cache-first with bg refresh.
 //   - API / non-GET: never cached.
 // Bump CACHE_NAME whenever the precache list or SW logic changes.
-const CACHE_NAME = 'odysseus-v380-shared-config-image-editor-lazy-katex-mermaid';
+const CACHE_NAME = 'odysseus-v381-shared-config-image-editor-lazy-katex-mermaid-modelbench';
 
 // KaTeX resolves these from its own stylesheet, so caching the CSS without them
 // gives offline math fallback glyphs instead of proper typesetting.
@@ -67,6 +67,10 @@ const PRECACHE = [
   '/static/js/cookbook.js',
   '/static/js/search-chat.js',
   '/static/js/compare/index.js',
+  '/static/js/modelbench/index.js',
+  '/static/js/modelbench/state.js',
+  '/static/js/modelbench/format.js',
+  '/static/js/modelbench/api.js',
   '/static/js/theme.js',
   '/static/js/censor.js',
   '/static/js/settings.js',
