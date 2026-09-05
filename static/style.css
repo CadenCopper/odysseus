@@ -41402,29 +41402,113 @@ body.settings-sidebar-resize-active {
 
 /* ── ModelBench dashboard (static/js/modelbench/index.js) ────────────────
    Read-only measurement dashboard: the empirical sibling of the hwfit
-   (hardware-fit prediction) tool. Fullscreen centered panel over the app,
-   mounted directly on document.body by the module. */
+   (hardware-fit prediction) tool. Mounted as a draggable/resizable/
+   z-ordered tool window (notes-style pane on a transparent backdrop that is
+   its stacking surface), docked right on desktop and a full-screen bottom
+   sheet on mobile — NOT a fullscreen panel over the app. */
 
-body.modelbench-open { overflow: hidden; }
-
-.modelbench-panel {
+/* The backdrop is the top-level stacking surface: transparent + click-
+   through, so the window behaves like the other dockable tool windows
+   (chat stays interactive beside a right-docked ModelBench). topToolWindowZ
+   scans `body > .modelbench-panel-backdrop` to fold it into the shared
+   tool-window z-order. */
+.modelbench-panel-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 300;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  pointer-events: none;
+  animation: modelbench-backdrop-fade 160ms ease both;
+}
+.modelbench-panel-backdrop .modelbench-panel {
+  pointer-events: auto;
+}
+@keyframes modelbench-backdrop-fade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* The draggable window itself. No `position:fixed; inset:0` here — geometry
+   is provided by the backdrop's flex centering on first mount and, once the
+   user interacts, by windowDrag / the edge-dock system writing inline styles
+   (right-dock by default). makeWindowResizable persists the size under
+   `winsize-modelbench-panel`. */
+.modelbench-panel {
   display: flex;
   flex-direction: column;
+  position: relative; /* containing block for the in-window drill-down modal */
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 10px;
   box-sizing: border-box;
+  overflow: hidden;
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   letter-spacing: -0.015em;
+  width: min(1120px, 92vw);
+  height: min(84vh, 900px);
+  max-width: 96vw;
+  max-height: 96vh;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
   animation: modelbench-panel-enter 180ms cubic-bezier(0.22, 0.61, 0.36, 1) both;
   outline: none;
 }
 @keyframes modelbench-panel-enter {
   from { opacity: 0; transform: scale(0.985); }
   to   { opacity: 1; transform: scale(1); }
+}
+@keyframes modelbench-mobile-enter {
+  from { transform: translateY(30px); opacity: 0.4; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+/* Edge-dock chrome (geometry itself is applied inline by modalSnap). */
+.modelbench-panel.modal-right-docked {
+  border-left: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: -4px 0 14px rgba(0, 0, 0, 0.18);
+}
+.modelbench-panel.modal-left-docked {
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: 4px 0 14px rgba(0, 0, 0, 0.18);
+}
+
+/* Top-edge fullscreen snap target. */
+.modelbench-panel.modelbench-window-fullscreen {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  max-width: 100vw !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* Fullscreen bottom-sheet on mobile (mirrors notes mobile handling). */
+@media (max-width: 768px) {
+  body.modelbench-open { overflow: hidden; }
+  .modelbench-panel-backdrop {
+    align-items: flex-end;
+    justify-content: stretch;
+  }
+  .modelbench-panel-backdrop .modelbench-panel {
+    width: 100%;
+    max-width: 100%;
+    height: 92vh;
+    max-height: 92vh;
+    border-radius: 14px 14px 0 0;
+    animation: modelbench-mobile-enter 0.25s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modelbench-panel,
+  .modelbench-panel-backdrop { animation: none; }
 }
 
 .modelbench-header {
@@ -41435,6 +41519,9 @@ body.modelbench-open { overflow: hidden; }
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
+  cursor: move; /* drag handle for the tool window */
+  user-select: none;
+  -webkit-user-select: none;
 }
 .modelbench-header-left { display: flex; align-items: center; gap: 8px; }
 .modelbench-title { margin: 0; font-size: 15px; font-weight: 650; }

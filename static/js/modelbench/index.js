@@ -1,16 +1,21 @@
 // modelbench/index.js — read-only ModelBench measurement dashboard.
-// Fullscreen panel appended to document.body, mirroring the compare/ and
-// notes.js panel-mounting idiom (own close button + Escape, no modalManager
-// registration since the panel has no minimize state).
+// Mounted as a draggable/resizable/z-ordered tool window on the app shell
+// (notes-style pane + backdrop on document.body), NOT a fullscreen panel.
+// Own close button + Escape, no modalManager registration since the window
+// has no minimize-to-chip state — closing removes it entirely.
 
 import state, { reset } from './state.js';
 import { fmtTps, fmtMs, fmtCtx, fitColor, ctxCliffClass, barPct } from './format.js';
 import { modelsUrl, metricsUrl, samplesUrl, sampleUrl } from './api.js';
+import { makeWindowDraggable } from '../windowDrag.js';
+import { topToolWindowZ } from '../toolWindowZOrder.js';
+import { applyEdgeDock, clearDockSide } from '../modalSnap.js';
 import uiModule from '../ui.js';
 
 const escapeHtml = uiModule.esc;
 
 let _panelEl = null;
+let _backdropEl = null;
 let _keydownHandler = null;
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -41,6 +46,7 @@ function open() {
     return;
   }
   state.isOpen = true;
+  _setRailActive(true);
   _mountPanel();
   document.body.classList.add('modelbench-open');
   _keydownHandler = (e) => {
@@ -62,12 +68,21 @@ function close() {
     document.removeEventListener('keydown', _keydownHandler);
     _keydownHandler = null;
   }
-  if (_panelEl) {
+  _setRailActive(false);
+  if (_backdropEl) {
+    _backdropEl.remove();
+    _backdropEl = null;
+  } else if (_panelEl) {
     _panelEl.remove();
-    _panelEl = null;
   }
+  _panelEl = null;
   document.body.classList.remove('modelbench-open');
   reset();
+}
+
+function _setRailActive(on) {
+  const btn = document.getElementById('tool-modelbench-btn');
+  if (btn) btn.classList.toggle('active', on);
 }
 
 async function refresh() {
@@ -140,10 +155,110 @@ function _mountPanel() {
     </div>
   `;
 
-  document.body.appendChild(panel);
+  const backdrop = document.createElement('div');
+  backdrop.className = 'modelbench-panel-backdrop';
+  backdrop.id = 'modelbench-panel-backdrop';
+
+  backdrop.appendChild(panel);
+  document.body.appendChild(backdrop);
   _panelEl = panel;
+  _backdropEl = backdrop;
+
   _wirePanelEvents(panel);
+  _wireModelbenchWindow(panel);
+  if (window.innerWidth > 768) {
+    _restoreModelbenchDock(panel);
+  } else {
+    _applyModelbenchMobileSheet(panel);
+  }
+  _bringModelbenchToFront(panel);
   return panel;
+}
+
+// ── draggable tool-window wiring (notes-style pane + backdrop) ──
+function _wireModelbenchWindow(pane) {
+  if (!pane || pane.dataset.windowDragWired === '1') return;
+  const header = pane.querySelector('.modelbench-header');
+  if (!header) return;
+  pane.dataset.windowDragWired = '1';
+
+  const enterFs = () => {
+    // Drop any stale dock/floating inline geometry first so the CSS
+    // `.modelbench-window-fullscreen` rule (fixed; inset:0) takes over cleanly.
+    _clearModelbenchSnapStyles(pane);
+    pane.classList.add('modelbench-window-fullscreen');
+  };
+  const exitFs = () => _restoreModelbenchDock(pane);
+
+  makeWindowDraggable(pane, {
+    content: pane,
+    header,
+    fsClass: 'modelbench-window-fullscreen',
+    skipSelector: 'button, input, select, textarea, .modelbench-close-btn, #mb-think-toggle',
+    enableDock: true,
+    enableLeftDock: true,
+    onEnterFullscreen: enterFs,
+    onExitFullscreen: exitFs,
+  });
+
+  // Bring the window to the front on header pointer/focus interaction.
+  const bring = () => _bringModelbenchToFront(pane);
+  pane.addEventListener('pointerdown', bring, true);
+  pane.addEventListener('focusin', bring, true);
+  header.addEventListener('click', bring);
+  header.addEventListener('focus', bring);
+}
+
+function _clearModelbenchSnapStyles(pane) {
+  if (!pane) return;
+  const hadLeft = pane.classList.contains('modal-left-docked');
+  const hadRight = pane.classList.contains('modal-right-docked');
+  pane.classList.remove('modelbench-window-fullscreen', 'modal-left-docked', 'modal-right-docked');
+  if (hadLeft) clearDockSide('left', pane);
+  if (hadRight) clearDockSide('right', pane);
+  ['position', 'left', 'top', 'right', 'bottom', 'width', 'max-width', 'height',
+    'max-height', 'margin', 'transform', 'border-radius']
+    .forEach((prop) => pane.style.removeProperty(prop));
+  delete pane.dataset._tilePreSnap;
+  delete pane.dataset._tileZone;
+  delete pane._preDockSnapshot;
+  delete pane._dockSide;
+  delete pane._dockSuspended;
+}
+
+function _restoreModelbenchDock(pane) {
+  if (!pane || window.innerWidth <= 768) return;
+  _clearModelbenchSnapStyles(pane);
+  if (!pane.isConnected) return;
+  applyEdgeDock(pane, 'right');
+}
+
+function _applyModelbenchMobileSheet(pane) {
+  if (!pane) return;
+  pane.style.position = 'fixed';
+  pane.style.left = '0';
+  pane.style.right = '0';
+  pane.style.top = 'auto';
+  pane.style.bottom = '0';
+  pane.style.width = '100%';
+  pane.style.maxWidth = '100%';
+  pane.style.height = '92vh';
+  pane.style.maxHeight = '92vh';
+  pane.style.borderRadius = '14px 14px 0 0';
+}
+
+// The window's own stacking surface participates in the shared tool-window
+// z-order (topToolWindowZ scans body > .modelbench-panel-backdrop).
+function _bringModelbenchToFront(pane = document.getElementById('modelbench-panel')) {
+  if (!pane) return;
+  const backdrop = document.getElementById('modelbench-panel-backdrop') || pane.parentElement;
+  const z = topToolWindowZ({ exclude: backdrop }) + 1;
+  if (backdrop) backdrop.style.setProperty('z-index', String(z), 'important');
+  try {
+    window.dispatchEvent(new CustomEvent('odysseus:modal-opened', {
+      detail: { id: 'modelbench-panel', modal: pane },
+    }));
+  } catch (_) {}
 }
 
 function _wirePanelEvents(panel) {
