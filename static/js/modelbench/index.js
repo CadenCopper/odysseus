@@ -315,7 +315,9 @@ function _applyModelbenchFloatRect(pane, g) {
   _clearModelbenchSnapStyles(pane);
   if (!pane.isConnected) return;
   const vw = window.innerWidth, vh = window.innerHeight;
-  const minW = 340, minH = 260;
+  // Floors mirror makeWindowResizable's MIN_W/MIN_H so a legitimately small
+  // saved window isn't inflated on restore; only off-screen geometry is clamped.
+  const minW = 320, minH = 200;
   const w = Math.max(minW, Math.min(g.w || 486, vw - 12));
   const h = Math.max(minH, Math.min(g.h || 577, vh - 12));
   const x = Math.max(4, Math.min(g.x ?? (vw - w - 4), vw - w - 4));
