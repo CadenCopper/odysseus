@@ -41428,6 +41428,16 @@ body.settings-sidebar-resize-active {
 .modelbench-panel-backdrop .modelbench-panel {
   pointer-events: auto;
 }
+/* Backdrop click-to-dismiss (notes/tool-window convention): while the window
+   is FLOATING (neither docked nor fullscreen) the uncovered backdrop surface
+   becomes the click-to-close hit area — clicking outside the panel dismisses
+   it. When docked or fullscreen the backdrop stays click-through so the chat /
+   underlying UI beside a docked ModelBench remains interactive and a
+   full-screen snap can't trap the pointer (the close btn / Escape / drag still
+   exit those states). */
+.modelbench-panel-backdrop:has(.modelbench-panel:not(.modal-right-docked):not(.modal-left-docked):not(.modelbench-window-fullscreen)) {
+  pointer-events: auto;
+}
 @keyframes modelbench-backdrop-fade {
   from { opacity: 0; }
   to   { opacity: 1; }

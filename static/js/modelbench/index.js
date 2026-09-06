@@ -18,6 +18,16 @@ let _panelEl = null;
 let _backdropEl = null;
 let _keydownHandler = null;
 
+// Float-geometry persistence (FAIL #3): the window remembers its last
+// FLOATING position+size so a close→reopen restores it instead of always
+// re-docking right at the default. windowResize keeps the size under
+// `winsize-modelbench-panel`; this key carries the full float rect so the
+// reopen path has an exact left/top/width/height to restore.
+const MB_FLOAT_RECT_KEY = 'modelbench-float-rect';
+// Rect captured when entering fullscreen, so drag-down "unsnaps" back to the
+// windowed geometry the window had before the top-edge snap.
+let _fsPreRect = null;
+
 // ────────────────────────────────────────────────────────────────────────────
 // ── fetch helper ──
 // ────────────────────────────────────────────────────────────────────────────
@@ -69,6 +79,9 @@ function close() {
     _keydownHandler = null;
   }
   _setRailActive(false);
+  // Snapshot the current floating geometry (no-op while docked/fullscreen, so
+  // the last genuinely-floated rect is what a reopen restores).
+  _saveModelbenchFloat(_panelEl);
   if (_backdropEl) {
     _backdropEl.remove();
     _backdropEl = null;
@@ -158,6 +171,13 @@ function _mountPanel() {
   const backdrop = document.createElement('div');
   backdrop.className = 'modelbench-panel-backdrop';
   backdrop.id = 'modelbench-panel-backdrop';
+  // Backdrop click-to-dismiss (notes/tool-window convention, notes.js
+  // L1236-38): clicking the outer backdrop surface — i.e. OUTSIDE the panel —
+  // closes the window. close() removes the backdrop element entirely, so a
+  // backdrop dismiss leaves no stray backdrop / pointer trap behind.
+  backdrop.addEventListener('click', (ev) => {
+    if (ev.target === backdrop) close();
+  });
 
   backdrop.appendChild(panel);
   document.body.appendChild(backdrop);
@@ -167,7 +187,11 @@ function _mountPanel() {
   _wirePanelEvents(panel);
   _wireModelbenchWindow(panel);
   if (window.innerWidth > 768) {
-    _restoreModelbenchDock(panel);
+    // Restore the last floating geometry when one was saved; only dock right
+    // (the default) when the user has never floated the window.
+    if (!_restoreModelbenchFloatGeometry(panel)) {
+      _restoreModelbenchDock(panel);
+    }
   } else {
     _applyModelbenchMobileSheet(panel);
   }
@@ -183,12 +207,25 @@ function _wireModelbenchWindow(pane) {
   pane.dataset.windowDragWired = '1';
 
   const enterFs = () => {
+    // Remember the rect we're leaving so a drag-down unsnap can restore it
+    // instead of dropping the window into an arbitrary spot.
+    try {
+      const r = pane.getBoundingClientRect();
+      if (r.width && r.height) {
+        _fsPreRect = { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+      }
+    } catch (_) {}
     // Drop any stale dock/floating inline geometry first so the CSS
     // `.modelbench-window-fullscreen` rule (fixed; inset:0) takes over cleanly.
     _clearModelbenchSnapStyles(pane);
     pane.classList.add('modelbench-window-fullscreen');
   };
-  const exitFs = () => _restoreModelbenchDock(pane);
+  const exitFs = () => {
+    const pre = _fsPreRect;
+    _fsPreRect = null;
+    if (pre) _applyModelbenchFloatRect(pane, pre); // unsnap to the pre-fullscreen windowed geometry
+    else _restoreModelbenchDock(pane);
+  };
 
   makeWindowDraggable(pane, {
     content: pane,
@@ -199,6 +236,7 @@ function _wireModelbenchWindow(pane) {
     enableLeftDock: true,
     onEnterFullscreen: enterFs,
     onExitFullscreen: exitFs,
+    onDragEnd: () => _saveModelbenchFloat(pane),
   });
 
   // Bring the window to the front on header pointer/focus interaction.
@@ -231,6 +269,74 @@ function _restoreModelbenchDock(pane) {
   _clearModelbenchSnapStyles(pane);
   if (!pane.isConnected) return;
   applyEdgeDock(pane, 'right');
+}
+
+// ── floating-rect persistence (FAIL #3) ────────────────────────────────────
+// Reads the last saved float rect, or null when none exists (fresh user).
+function _readModelbenchFloat() {
+  if (typeof localStorage === 'undefined') return null;
+  try {
+    const g = JSON.parse(localStorage.getItem(MB_FLOAT_RECT_KEY) || 'null');
+    if (!g) return null;
+    if (![g.x, g.y, g.w, g.h].every((n) => Number.isFinite(n) && n > 0)) return null;
+    return g;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Save the current floating geometry. No-op while docked/fullscreen/mobile so
+// the "last genuinely floated" rect survives a docked close (the window is
+// still re-openable docked; the float is what persistence restores).
+function _saveModelbenchFloat(pane) {
+  if (!pane || !pane.isConnected) return;
+  if (window.innerWidth <= 768) return;
+  const docked = pane.classList.contains('modal-right-docked')
+    || pane.classList.contains('modal-left-docked')
+    || pane.classList.contains('modelbench-window-fullscreen');
+  if (docked) return;
+  let r;
+  try { r = pane.getBoundingClientRect(); } catch (_) { return; }
+  if (!r.width || !r.height) return;
+  const g = { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) };
+  try {
+    localStorage.setItem(MB_FLOAT_RECT_KEY, JSON.stringify(g));
+    // Keep the shared windowResize key in sync so its deferred on-open restore
+    // (storageKey 'winsize-<id>') agrees with the rect we restore instead of
+    // fighting it with a stale size.
+    localStorage.setItem('winsize-modelbench-panel', JSON.stringify({ w: g.w, h: g.h }));
+  } catch (_) {}
+}
+
+// Apply a float rect as inline fixed geometry, clamping to the viewport so a
+// restored window is never left off-screen.
+function _applyModelbenchFloatRect(pane, g) {
+  if (!pane || !g) return;
+  _clearModelbenchSnapStyles(pane);
+  if (!pane.isConnected) return;
+  const vw = window.innerWidth, vh = window.innerHeight;
+  const minW = 340, minH = 260;
+  const w = Math.max(minW, Math.min(g.w || 486, vw - 12));
+  const h = Math.max(minH, Math.min(g.h || 577, vh - 12));
+  const x = Math.max(4, Math.min(g.x ?? (vw - w - 4), vw - w - 4));
+  const y = Math.max(4, Math.min(g.y ?? 4, vh - h - 4));
+  pane.style.position = 'fixed';
+  pane.style.left = x + 'px';
+  pane.style.top = y + 'px';
+  pane.style.width = w + 'px';
+  pane.style.height = h + 'px';
+  pane.style.maxWidth = 'none';
+  pane.style.maxHeight = 'none';
+}
+
+// Restore the last saved float geometry on open. Returns true when a float was
+// restored (callers should NOT then dock-right); false when the user has no
+// saved float (fall through to the default right-dock).
+function _restoreModelbenchFloatGeometry(pane) {
+  const g = _readModelbenchFloat();
+  if (!g) return false;
+  _applyModelbenchFloatRect(pane, g);
+  return true;
 }
 
 function _applyModelbenchMobileSheet(pane) {

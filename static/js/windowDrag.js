@@ -61,7 +61,15 @@ export function makeWindowDraggable(modal, options = {}) {
   const fsClass = options.fsClass || null;
   const onEnterFullscreen = options.onEnterFullscreen || null;
   const onExitFullscreen = options.onExitFullscreen || null;
-  const enableFullscreen = false;
+  // Top-edge fullscreen snap is ON by default for any draggable window that
+  // supplies a fullscreen class + enter/exit callbacks (fsClass + the
+  // onEnter/onExitFullscreen handlers do the actual geometry work; without a
+  // callback there is nothing to snap). Callers that must keep the gesture
+  // disabled pass enableFullscreen:false. This was previously hardcoded false,
+  // which silently disabled the top-edge snap for EVERY callsite (calendar,
+  // tasks, gallery, email, notes, modelbench, ...) — see docstring above.
+  const enableFullscreen = (options.enableFullscreen !== false)
+    && !!fsClass && !!onEnterFullscreen;
   const onDragEnd = options.onDragEnd || null;
   const onDragStart = options.onDragStart || null;
   const skipSelector = options.skipSelector || 'button, input, select';
