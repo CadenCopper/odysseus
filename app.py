@@ -826,6 +826,16 @@ bench_job_registry = BenchJobRegistry()
 from routes.modelbench.ollama_routes import setup_ollama_routes
 app.include_router(setup_ollama_routes(bench_registry=bench_job_registry))
 
+# Runs API (start/list/poll/cancel) fronts the same single-run registry and
+# drives the container-native runner engine. Attach the engine to the registry
+# so a submitted job actually runs (the registry's no-arg default no-ops a job
+# straight to done). Attaching is inert — it only registers the callable; no
+# runner work happens until a job is submitted.
+from services.modelbench.runner import run_bench
+bench_job_registry.attach_runner(run_bench)
+from routes.modelbench.runs_routes import setup_runs_routes
+app.include_router(setup_runs_routes(bench_registry=bench_job_registry))
+
 # User Preferences
 from routes.prefs_routes import setup_prefs_routes
 app.include_router(setup_prefs_routes())

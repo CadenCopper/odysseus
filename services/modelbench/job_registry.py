@@ -147,7 +147,6 @@ class BenchJobRegistry:
         If None, the job body no-ops straight to done (so the registry is
         testable without a real ModelBench harness wired in).
         """
-        self.loop = asyncio.get_event_loop()
         self._runner = runner
         self._heartbeat_interval = heartbeat_interval
         self._stale_timeout = stale_timeout
@@ -207,7 +206,7 @@ class BenchJobRegistry:
             self._active_job_id = job_id
             self._running = True
 
-        self.loop.create_task(self._dispatch(job_id))
+        asyncio.get_running_loop().create_task(self._dispatch(job_id))
         return result
 
     async def _dispatch(self, job_id) -> None:
@@ -319,7 +318,7 @@ class BenchJobRegistry:
     def start_supervisor(self) -> None:
         """Spawn the stale-heartbeat supervisor loop, if not already running."""
         if self._supervisor_task is None or self._supervisor_task.done():
-            self._supervisor_task = self.loop.create_task(self._supervisor_loop())
+            self._supervisor_task = asyncio.get_running_loop().create_task(self._supervisor_loop())
 
     async def stop_supervisor(self) -> None:
         """Cancel the supervisor loop task and wait for it to unwind."""
