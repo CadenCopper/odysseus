@@ -7,11 +7,14 @@
 // idiom used for runner.js (see tests/test_modelbench_frontend_js.py). No DOM,
 // no fetch, no ui.js import chain, so `node --input-type=module` can load it.
 //
-// CSP contract (core/middleware.py): tooltips are pure-CSS [data-tooltip]
-// spans driven by ::before/::after on :hover/:focus — no inline event
-// handlers, no inline <script>, no new vendored deps. Inline style="" attrs
-// are intentionally allowed by the CSP (`style-src 'unsafe-inline'`) and are
-// used only for pre-existing colored badges/bars.
+// CSP contract (core/middleware.py): script-src 'self' 'nonce-<per-request>'
+// forbids inline event-handler attributes (onclick/onmouseenter/...), so each
+// ?-bubble is a real focusable <button type="button"> whose aria-label and
+// data-tooltip carry the grounded copy, and index.js wires show/hide via
+// addEventListener onto ONE positioned tooltip element. No inline handlers, no
+// inline <script>, no new vendored deps. Inline style="" attrs are allowed by
+// the CSP (`style-src 'unsafe-inline'`) and are used only for pre-existing
+// colored badges/bars.
 
 import { fmtCtx, ctxCliffClass, fitColor, barPct } from './format.js';
 
@@ -37,42 +40,56 @@ export const PROVENANCE_FIELDS = [
  * Static tooltip copy keyed by the dashboard element it explains. Values are
  * author-controlled and constant; they are HTML-escaped on insert into the
  * data-tooltip attribute regardless, so they are safe even if later edited.
+ * Copy is grounded in the operator/themis decision for this card.
  */
 export const TOOLTIPS = {
   think:
-    'Reasoning-mode split: no = samples run with thinking disabled (no chain-of-thought), ' +
-    'yes = samples that emitted a thinking trace. Read as "no N · yes M".',
+    'Whether the run enabled the model\u2019s thinking/reasoning channel. ' +
+    'A model is sampled in both classes when it supports thinking.',
   provenance:
-    `Provenance complete/total: how many of a model's samples are fully re-verifiable. ` +
-    `A sample is complete when all ${PROVENANCE_FIELDS.length} provenance fields are non-null: ` +
-    `${PROVENANCE_FIELDS.join(', ')}.`,
+    `Provenance-complete = the ${PROVENANCE_FIELDS.length} identity fields on the row are all non-null ` +
+    `(${PROVENANCE_FIELDS.join(', ')}), so the sample can be re-verified. Renders complete/total.`,
   fit_split:
-    'Fit split = where each sample ran on the 12 GB card, by the size_vram/size ratio: ' +
-    '≥ 1.0 → fit (fully resident in VRAM), 0 < ratio < 1.0 → partial (shares the card), ' +
-    '≤ 0 → offload (not resident).',
+    'VRAM residency on the 12GB card: fit = model fully resident in VRAM ' +
+    '(size_vram/size >= 1.0), partial = partially resident, offload = not ' +
+    'resident in VRAM (size_vram ~0). Derived from ollama /api/ps.',
   context:
-    'Context window: advertised = the model\'s declared max; ' +
-    'achieved = the largest ctx_len actually measured across the model\'s fit class.',
+    'Advertised = the model\u2019s maximum context_length; achieved = the highest ' +
+    'ctx point the sweep actually reached for this model\u2019s fit class. ' +
+    '\u2018cliff\u2019 flag = achieved fell short of advertised.',
   tokens_per_sec:
-    'Tokens/sec = mean generation throughput: output tokens produced per second across the selected samples.',
+    'Tokens/sec = output tokens produced per second across the selected samples.',
   ttft:
     'TTFT = time to first token, in ms: latency until the model emits its first output token.',
   latency:
     'Latency = total per-sample generation time, in ms (end-to-end).',
 };
 
+// Human column/metric name for each tooltip key, used to build the grounded
+// aria-label ("What is <col>?") on the trigger button.
+const TIP_COL = {
+  think: 'Think',
+  provenance: 'Provenance',
+  fit_split: 'Fit split',
+  context: 'Context',
+  tokens_per_sec: 'Tokens/sec',
+  ttft: 'TTFT (ms)',
+  latency: 'Latency (ms)',
+};
+
 /**
- * Pure-CSS tooltip trigger: a `?` span carrying the explanation in a
- * data-tooltip attribute. The CSS (static/style.css .modelbench-tip) renders
- * the bubble via ::before/::after on :hover and :focus. tabindex="0" makes the
- * trigger keyboard-focusable so the bubble is reachable without a mouse.
- * CSP-safe: no handlers, no inline styles on this span.
+ * ?-bubble tooltip trigger: a real, keyboard-focusable <button type="button">
+ * that carries the grounded explanation in both a machine-readable
+ * data-tooltip attribute and a human aria-label. index.js wires a single
+ * positioned tooltip element to it via addEventListener on mouseenter/focus /
+ * mouseleave/blur (CSP-safe — no inline event-handler attributes here).
  */
-export function tipSpan(key) {
+export function tipButton(key) {
   const text = TOOLTIPS[key];
   if (!text) return '';
   const enc = esc(text);
-  return `<span class="modelbench-tip" tabindex="0" role="note" data-tooltip="${enc}" aria-label="${enc}">?</span>`;
+  const col = TIP_COL[key] || key;
+  return `<button type="button" class="modelbench-tip" aria-label="What is ${esc(col)}?" data-tooltip="${enc}">?</button>`;
 }
 
 /**
@@ -128,10 +145,10 @@ export function modelsTableHtml(models = [], activeModel) {
   return '<table class="modelbench-table" aria-label="Model summary"><thead><tr>' +
     '<th scope="col">Model</th><th scope="col">Params</th><th scope="col">Quant</th>' +
     '<th scope="col">Samples</th>' +
-    `<th scope="col">Think (no / yes) ${tipSpan('think')}</th>` +
-    `<th scope="col">Fit split ${tipSpan('fit_split')}</th>` +
-    `<th scope="col">Context (advertised → achieved) ${tipSpan('context')}</th>` +
-    `<th scope="col">Provenance ${tipSpan('provenance')}</th>` +
+    `<th scope="col">Think (no / yes) ${tipButton('think')}</th>` +
+    `<th scope="col">Fit split ${tipButton('fit_split')}</th>` +
+    `<th scope="col">Context (advertised → achieved) ${tipButton('context')}</th>` +
+    `<th scope="col">Provenance ${tipButton('provenance')}</th>` +
     '</tr></thead><tbody>' + rows + '</tbody></table>';
 }
 
@@ -141,7 +158,7 @@ export function modelsTableHtml(models = [], activeModel) {
  * `fmt` formats the numeric values.
  */
 export function metricBlockHtml(label, tipKey, m, fmt) {
-  const tip = tipSpan(tipKey);
+  const tip = tipButton(tipKey);
   if (!m) {
     return '<div class="modelbench-metric-block">' +
       `<div class="modelbench-metric-label">${esc(label)} ${tip}</div>` +

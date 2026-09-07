@@ -450,8 +450,8 @@ def test_runner_cancel_path_returns_to_inactive(node_available):
 
 # ── markup.js (tooltips + interpretability) ────────────────────────
 # markup.js holds the pure DOM-free builders behind the models table and the
-# metric blocks (headers with ?-tooltips, the unambiguous think split, fit
-# badges, provenance) so the exact strings that ship to the page are
+# metric blocks (headers with ?-tooltip buttons, the unambiguous think split,
+# fit badges, provenance) so the exact strings that ship to the page are
 # unit-testable under node like the other pure helpers. index.js itself stays
 # out of node (DOM panel), so the pieces that moved here carry the coverage.
 
@@ -464,6 +464,9 @@ _EXPECTED_PROVENANCE_FIELDS = [
 
 _TOOLTIP_KEYS = ["think", "provenance", "fit_split", "context",
                  "tokens_per_sec", "ttft", "latency"]
+
+# The aria-label prefix the ?-bubble button must carry: "What is <col>?".
+_ARIA_LABEL_PREFIX = "What is "
 
 
 def _render_models_table_script():
@@ -553,14 +556,14 @@ def test_metric_labels_carry_tooltip_spans(node_available):
 
 def test_tooltip_content_explains_columns_and_metrics(node_available):
     script = textwrap.dedent("""\
-        const { tipSpan } = await import('./static/js/modelbench/markup.js');
+        const { tipButton } = await import('./static/js/modelbench/markup.js');
         const keys = %s;
-        const spans = {};
-        for (const k of keys) spans[k] = tipSpan(k);
-        console.log(JSON.stringify({ spans }));
+        const buttons = {};
+        for (const k of keys) buttons[k] = tipButton(k);
+        console.log(JSON.stringify({ buttons }));
     """ % json.dumps(_TOOLTIP_KEYS))
-    spans = _run_node(script)["spans"]
-    content = {k: _extract_data_tooltips(v)[0] for k, v in spans.items()}
+    buttons = _run_node(script)["buttons"]
+    content = {k: _extract_data_tooltips(v)[0] for k, v in buttons.items()}
     for k in _TOOLTIP_KEYS:
         assert content[k], f"tooltip {k!r} has no data-tooltip content"
 
@@ -568,43 +571,58 @@ def test_tooltip_content_explains_columns_and_metrics(node_available):
     assert str(len(_EXPECTED_PROVENANCE_FIELDS)) in prov, "provenance tooltip must state the field count"
     for f in _EXPECTED_PROVENANCE_FIELDS:
         assert f in prov, f"provenance tooltip must enumerate {f!r}"
+    assert "complete/total" in prov, "provenance tooltip must say it renders complete/total"
 
     fit = content["fit_split"]
     assert "size_vram/size" in fit
-    for word in ("fit", "partial", "offload", "12 GB"):
+    for word in ("fit", "partial", "offload", "12GB", "/api/ps"):
         assert word in fit, f"fit_split tooltip must mention {word!r}"
 
     ctx = content["context"]
     assert "advertised" in ctx and "achieved" in ctx
+    assert "cliff" in ctx, "context tooltip must explain the cliff flag"
     think_lc = content["think"].lower()
-    assert "reasoning" in think_lc and "no" in think_lc and "yes" in think_lc
-    assert "throughput" in content["tokens_per_sec"]
+    assert "thinking" in think_lc and "reasoning" in think_lc
+    assert "output tokens" in content["tokens_per_sec"]
     assert "first output token" in content["ttft"]
     assert "generation time" in content["latency"]
 
 
-def test_tooltip_trigger_has_no_inline_handlers_or_styles(node_available):
+def test_tooltip_trigger_is_focusable_button_with_grounded_aria_label(node_available):
+    # The ?-bubble helper must render a real, keyboard-focusable <button
+    # type="button"> whose aria-label is grounded: "What is <col>?".
     script = textwrap.dedent("""\
-        const { tipSpan } = await import('./static/js/modelbench/markup.js');
+        const { tipButton } = await import('./static/js/modelbench/markup.js');
         const keys = %s;
-        const spans = keys.map((k) => tipSpan(k)).join('\\n');
-        console.log(JSON.stringify({ spans }));
+        const buttons = keys.map((k) => tipButton(k)).join('\\n');
+        console.log(JSON.stringify({ buttons }));
     """ % json.dumps(_TOOLTIP_KEYS))
-    span_markup = _run_node(script)["spans"]
-    assert "tabindex=\"0\"" in span_markup, "trigger must be keyboard-focusable"
-    assert re.search(r"\son\w+\s*=\s*['\"]", span_markup, re.I) is None
-    assert "style=" not in span_markup, "tooltip trigger must carry no inline style"
+    markup = _run_node(script)["buttons"]
+    buttons = re.findall(r"<button[^>]*>", markup)
+    assert buttons, "no <button> triggers rendered"
+    assert len(buttons) == len(_TOOLTIP_KEYS), f"expected {len(_TOOLTIP_KEYS)} triggers, got {len(buttons)}"
+    for b in buttons:
+        assert re.search(r'\btype="button"', b), f"trigger must be type=button: {b}"
+        assert "modelbench-tip" in b, f"trigger must carry modelbench-tip class: {b}"
+        m = re.search(r'aria-label="([^"]*)"', b)
+        assert m, f"trigger missing aria-label: {b}"
+        assert m.group(1).startswith(_ARIA_LABEL_PREFIX) and m.group(1).endswith("?"), \
+            f"aria-label must be 'What is <col>?': {m.group(1)!r}"
+    # Keyboard-focusable natively (a real button), no tabindex hack needed but
+    # none of the forbidden inline handlers may appear.
+    assert re.search(r"\son\w+\s*=\s*['\"]", markup, re.I) is None
+    assert "style=" not in markup, "tooltip trigger must carry no inline style"
 
 
 # ── CSP guard ──────────────────────────────────────────────────────
 
 def test_modelbench_markup_no_inline_handlers_or_scripts(node_available):
     # Everything the tooltip/interpretability change injects (models table,
-    # metric blocks, tooltip spans) must stay inside the CSP nonce contract:
+    # metric blocks, tooltip buttons) must stay inside the CSP nonce contract:
     # no inline on*= event-handler attributes, no <script> elements, no new
     # external script src.
     script = textwrap.dedent("""\
-        const { modelsTableHtml, metricBlockHtml, tipSpan } = await import('./static/js/modelbench/markup.js');
+        const { modelsTableHtml, metricBlockHtml, tipButton } = await import('./static/js/modelbench/markup.js');
         const fmt = (v) => String(v);
         const sample = { mean: 12.3, min: 1, max: 99, count: 20, percentiles: { p50: 11, p99: 88 } };
         const table = modelsTableHtml([{
@@ -617,10 +635,13 @@ def test_modelbench_markup_no_inline_handlers_or_scripts(node_available):
         const tps = metricBlockHtml('Tokens/sec', 'tokens_per_sec', sample, fmt);
         const ttft = metricBlockHtml('TTFT (ms)', 'ttft', sample, fmt);
         const lat = metricBlockHtml('Latency (ms)', 'latency', sample, fmt);
-        const tips = ['think','provenance','fit_split','context','tokens_per_sec','ttft','latency'].map((k) => tipSpan(k)).join('');
+        const tips = ['think','provenance','fit_split','context','tokens_per_sec','ttft','latency'].map((k) => tipButton(k)).join('');
         console.log(JSON.stringify({ combined: table + tps + ttft + lat + tips }));
     """)
     combined = _run_node(script)["combined"].lower()
+    for handler in ("onclick", "onmouseenter", "onmouseleave", "onfocus", "onblur"):
+        assert re.search(rf"\b{handler}\s*=", combined) is None, \
+            f"inline {handler}= handler injected"
     assert re.search(r"\son\w+\s*=\s*['\"]", combined) is None, "inline on*= handler injected"
     assert "<script" not in combined, "a <script> element was injected"
     assert "http://" not in combined and "https://" not in combined, \

@@ -16,6 +16,65 @@ import uiModule from '../ui.js';
 
 const escapeHtml = uiModule.esc;
 
+// ────────────────────────────────────────────────────────────────────────────
+// ── ?-tooltip wiring (CSP-safe: addEventListener only, no inline handlers) ──
+// ────────────────────────────────────────────────────────────────────────────
+// A single positioned tooltip element, shared by every .modelbench-tip ?-bubble
+// button. On mouseenter/focus the button's data-tooltip copy is copied in and
+// the bubble is shown positioned above it; on mouseleave/blur it hides. All
+// positioning is done via CSS classes (style-src 'unsafe-inline' also allows
+// inline style, but classes are preferred and this stays handler-free).
+let _tipEl = null;
+
+function _getTipEl() {
+  if (_tipEl) return _tipEl;
+  _tipEl = document.createElement('div');
+  _tipEl.className = 'modelbench-tooltip';
+  _tipEl.setAttribute('role', 'tooltip');
+  _tipEl.hidden = true;
+  document.body.appendChild(_tipEl);
+  return _tipEl;
+}
+
+function _positionTip(btn, tip) {
+  const r = btn.getBoundingClientRect();
+  // Position the bubble above the trigger, horizontally centered on it.
+  // Classes (.modelbench-tooltip--below) flip it under the trigger when there
+  // is no room above. left/top are set via inline style — allowed by CSP's
+  // style-src 'unsafe-inline'; class toggles handle show/hide.
+  tip.style.left = `${r.left + r.width / 2}px`;
+  tip.style.top = `${r.top - 6}px`;
+  tip.classList.remove('modelbench-tooltip--below');
+  tip.classList.add('modelbench-tooltip--above');
+  if (r.top < 90) {
+    tip.classList.remove('modelbench-tooltip--above');
+    tip.classList.add('modelbench-tooltip--below');
+  }
+}
+
+function _showTip(btn) {
+  const tip = _getTipEl();
+  tip.textContent = btn.dataset.tooltip || '';
+  tip.hidden = false;
+  _positionTip(btn, tip);
+}
+
+function _hideTip() {
+  if (_tipEl) _tipEl.hidden = true;
+}
+
+/** Wire every .modelbench-tip button under `root` to the shared tooltip. */
+function _wireModelbenchTooltips(root) {
+  if (!root) return;
+  root.querySelectorAll('.modelbench-tip').forEach((btn) => {
+    btn.addEventListener('mouseenter', () => _showTip(btn));
+    btn.addEventListener('focus', () => _showTip(btn));
+    btn.addEventListener('mouseleave', _hideTip);
+    btn.addEventListener('blur', _hideTip);
+  });
+}
+
+
 let _panelEl = null;
 let _backdropEl = null;
 let _keydownHandler = null;
@@ -761,6 +820,7 @@ function _renderModelsTable(data) {
   // split, fit badges, ctx column and provenance — is built in markup.js so
   // the exact shipped HTML is unit-testable under plain node.
   wrap.innerHTML = modelsTableHtml(models, state.filters.model);
+  _wireModelbenchTooltips(wrap);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -808,6 +868,7 @@ function _renderMetrics(data) {
       '</div>';
   }
   body.innerHTML = html;
+  _wireModelbenchTooltips(body);
 }
 
 // ────────────────────────────────────────────────────────────────────────────

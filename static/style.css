@@ -41747,44 +41747,43 @@ body.settings-sidebar-resize-active {
 }
 .modelbench-bar-value { width: 84px; flex-shrink: 0; font-family: ui-monospace, Menlo, Consolas, monospace; }
 
-/* ?-tooltip bubbles (pure-CSS, CSP-safe — no handlers / no inline styles).
-   Trigger = a .modelbench-tip span carrying data-tooltip="…" and tabindex="0".
-   Bubble text via ::after { content: attr(data-tooltip) }, caret via ::before;
-   shown on :hover and :focus (tabindex gives keyboard reach). */
+/* ?-tooltip bubbles (CSP-safe — no inline handlers, no inline styles).
+   Trigger = a real <button class="modelbench-tip"> carrying the grounded copy
+   in aria-label and data-tooltip. index.js shows/hides ONE positioned
+   .modelbench-tooltip element via addEventListener (mouseenter/focus show,
+   mouseleave/blur hide), positioning it above/below the trigger through the
+   --above / --below modifier classes. */
 .modelbench-tip {
-  position: relative;
   display: inline-block;
   width: 14px;
   height: 14px;
   margin-left: 4px;
-  text-align: center;
+  padding: 0;
+  border: none;
   border-radius: 50%;
   background: color-mix(in srgb, var(--fg) 14%, transparent);
   color: var(--fg);
   font-size: 10px;
   font-weight: 700;
   line-height: 14px;
+  text-align: center;
   cursor: help;
   vertical-align: 1px;
   text-transform: none;
   letter-spacing: 0;
+  font-family: inherit;
 }
-.modelbench-tip::after,
-.modelbench-tip::before {
-  position: absolute;
-  left: 50%;
-  bottom: calc(100% + 6px);
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transition: opacity 120ms ease;
-  z-index: 30;
+.modelbench-tip:hover,
+.modelbench-tip:focus,
+.modelbench-tip:focus-visible {
+  background: color-mix(in srgb, var(--fg) 26%, transparent);
+  outline: none;
 }
-.modelbench-tip::after {
-  content: attr(data-tooltip);
-  transform: translateX(-50%);
-  width: max-content;
-  max-width: 260px;
+
+.modelbench-tooltip {
+  position: fixed;
+  z-index: 400;
+  max-width: 280px;
   padding: 6px 9px;
   border-radius: 6px;
   background: color-mix(in srgb, var(--panel) 94%, var(--bg));
@@ -41795,26 +41794,13 @@ body.settings-sidebar-resize-active {
   font-weight: 500;
   line-height: 1.45;
   text-align: left;
-  text-transform: none;
-  letter-spacing: 0;
-  white-space: normal;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
 }
-.modelbench-tip::before {
-  content: '';
-  transform: translateX(-50%);
-  bottom: calc(100% - 1px);
-  border: 5px solid transparent;
-  border-top-color: var(--border);
+.modelbench-tooltip--below {
+  transform: translate(-50%, 10px);
 }
-.modelbench-tip:hover::after,
-.modelbench-tip:hover::before,
-.modelbench-tip:focus::after,
-.modelbench-tip:focus::before,
-.modelbench-tip:focus-visible::after,
-.modelbench-tip:focus-visible::before {
-  opacity: 1;
-  visibility: visible;
-}
+
 
 .modelbench-samples-meta { font-size: 11px; opacity: 0.6; margin-bottom: 2px; }
 
