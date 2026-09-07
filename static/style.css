@@ -41747,6 +41747,75 @@ body.settings-sidebar-resize-active {
 }
 .modelbench-bar-value { width: 84px; flex-shrink: 0; font-family: ui-monospace, Menlo, Consolas, monospace; }
 
+/* ?-tooltip bubbles (pure-CSS, CSP-safe — no handlers / no inline styles).
+   Trigger = a .modelbench-tip span carrying data-tooltip="…" and tabindex="0".
+   Bubble text via ::after { content: attr(data-tooltip) }, caret via ::before;
+   shown on :hover and :focus (tabindex gives keyboard reach). */
+.modelbench-tip {
+  position: relative;
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-left: 4px;
+  text-align: center;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--fg) 14%, transparent);
+  color: var(--fg);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  cursor: help;
+  vertical-align: 1px;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.modelbench-tip::after,
+.modelbench-tip::before {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  z-index: 30;
+}
+.modelbench-tip::after {
+  content: attr(data-tooltip);
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: 260px;
+  padding: 6px 9px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--panel) 94%, var(--bg));
+  color: var(--fg);
+  border: 1px solid var(--border);
+  box-shadow: 0 3px 10px rgb(0 0 0 / 0.35);
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.45;
+  text-align: left;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: normal;
+}
+.modelbench-tip::before {
+  content: '';
+  transform: translateX(-50%);
+  bottom: calc(100% - 1px);
+  border: 5px solid transparent;
+  border-top-color: var(--border);
+}
+.modelbench-tip:hover::after,
+.modelbench-tip:hover::before,
+.modelbench-tip:focus::after,
+.modelbench-tip:focus::before,
+.modelbench-tip:focus-visible::after,
+.modelbench-tip:focus-visible::before {
+  opacity: 1;
+  visibility: visible;
+}
+
 .modelbench-samples-meta { font-size: 11px; opacity: 0.6; margin-bottom: 2px; }
 
 /* Drill-down provenance modal (R4). */

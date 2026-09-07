@@ -7,6 +7,7 @@ panel) is not imported in node and is left to manual/Playwright verification.
 """
 
 import json
+import re
 import shutil
 import subprocess
 import textwrap
@@ -445,3 +446,199 @@ def test_runner_cancel_path_returns_to_inactive(node_available):
         "activeAfter": False,
         "statusAfter": "cancelled",
     }
+
+
+# ── markup.js (tooltips + interpretability) ────────────────────────
+# markup.js holds the pure DOM-free builders behind the models table and the
+# metric blocks (headers with ?-tooltips, the unambiguous think split, fit
+# badges, provenance) so the exact strings that ship to the page are
+# unit-testable under node like the other pure helpers. index.js itself stays
+# out of node (DOM panel), so the pieces that moved here carry the coverage.
+
+# The 11 provenance fields, mirrored from markup.js PROVENANCE_FIELDS and
+# routes/modelbench/modelbench_routes.py `_PROVENANCE_FIELDS`.
+_EXPECTED_PROVENANCE_FIELDS = [
+    "run_id", "model_tag", "true_params", "quant", "ctx_len", "think",
+    "prompt_bytes", "temperature", "seed", "ollama_version", "vrram_fit",
+]
+
+_TOOLTIP_KEYS = ["think", "provenance", "fit_split", "context",
+                 "tokens_per_sec", "ttft", "latency"]
+
+
+def _render_models_table_script():
+    return textwrap.dedent("""\
+        const { modelsTableHtml } = await import('./static/js/modelbench/markup.js');
+        const html = modelsTableHtml([{
+          model_tag: 'llama3:8b', true_params: '8B', quant: 'Q4_K_M',
+          sample_count: 7, think: { false: 2, true: 5 },
+          fit_split: { fit: 1, partial: 2, offload: 0 },
+          ctx: { advertised: 8192, achieved: 8192, achieved_swept: true },
+          provenance: { complete: 7, total: 7 },
+        }], null);
+        console.log(JSON.stringify({ html }));
+    """)
+
+
+def _render_metric_blocks_script():
+    return textwrap.dedent("""\
+        const { metricBlockHtml } = await import('./static/js/modelbench/markup.js');
+        const fmt = (v) => String(v);
+        const sample = { mean: 12.3, min: 1, max: 99, count: 20, percentiles: { p50: 11, p99: 88 } };
+        console.log(JSON.stringify({
+          tps: metricBlockHtml('Tokens/sec', 'tokens_per_sec', sample, fmt),
+          ttft: metricBlockHtml('TTFT (ms)', 'ttft', sample, fmt),
+          latency: metricBlockHtml('Latency (ms)', 'latency', sample, fmt),
+          no_data: metricBlockHtml('TTFT (ms)', 'ttft', null, fmt),
+        }));
+    """)
+
+
+def _extract_data_tooltips(markup):
+    return re.findall(r'data-tooltip="([^"]*)"', markup)
+
+
+# ── think split ────────────────────────────────────────────────────
+
+def test_models_table_think_split_is_labeled_and_unambiguous(node_available):
+    out = _run_node(_render_models_table_script())
+    html = out["html"]
+    # Unambiguous labeled inline form (operator ask #2).
+    assert "no 2 · yes 5" in html, "think cell must read 'no N · yes M'"
+    # Scope to the think cell (5th <td> of the row); provenance (7/7) legitimately
+    # keeps a bare N/M form, so we must not grep the whole row for it.
+    cells = re.findall(r"<td[^>]*>(.*?)</td>", html)
+    assert cells[4] == "no 2 · yes 5", f"think cell wrong: {cells[4]!r}"
+    assert "2 / 5" not in cells[4], "old ambiguous bare split still present"
+
+
+# ── tooltip markup presence ────────────────────────────────────────
+
+def test_models_table_required_headers_carry_tooltip_spans(node_available):
+    out = _run_node(_render_models_table_script())
+    thead = out["html"].split("<thead><tr>", 1)[1].split("</tr>", 1)[0]
+    ths = re.findall(r"<th[^>]*>(.*?)</th>", thead)
+
+    def th_for(prefix):
+        for t in ths:
+            if t.strip().startswith(prefix):
+                return t
+        raise AssertionError(f"no <th> for {prefix!r}: {ths}")
+
+    for label in ("Think (no / yes)", "Fit split",
+                  "Context (advertised → achieved)", "Provenance"):
+        th = th_for(label)
+        assert "modelbench-tip" in th, f"{label!r} header missing the ? trigger"
+        assert "data-tooltip=" in th, f"{label!r} header missing data-tooltip"
+
+    # Model / Params / Quant must stay exactly as before (no tooltip noise).
+    for label in ("Model", "Params", "Quant", "Samples"):
+        assert "data-tooltip=" not in th_for(label), \
+            f"{label!r} header must not gain a tooltip (keep as-is)"
+
+
+def test_metric_labels_carry_tooltip_spans(node_available):
+    out = _run_node(_render_metric_blocks_script())
+    for key in ("tps", "ttft", "latency"):
+        block = out[key]
+        label = block.split("modelbench-metric-label")[1].split("</div>")[0]
+        assert "modelbench-tip" in label, f"{key} metric label missing ? trigger"
+        tips = _extract_data_tooltips(label)
+        assert tips and tips[0].strip(), f"{key} metric label tooltip empty"
+    # The No-data branch keeps its label tooltip too.
+    assert "modelbench-tip" in out["no_data"]
+
+
+# ── tooltip content ────────────────────────────────────────────────
+
+def test_tooltip_content_explains_columns_and_metrics(node_available):
+    script = textwrap.dedent("""\
+        const { tipSpan } = await import('./static/js/modelbench/markup.js');
+        const keys = %s;
+        const spans = {};
+        for (const k of keys) spans[k] = tipSpan(k);
+        console.log(JSON.stringify({ spans }));
+    """ % json.dumps(_TOOLTIP_KEYS))
+    spans = _run_node(script)["spans"]
+    content = {k: _extract_data_tooltips(v)[0] for k, v in spans.items()}
+    for k in _TOOLTIP_KEYS:
+        assert content[k], f"tooltip {k!r} has no data-tooltip content"
+
+    prov = content["provenance"]
+    assert str(len(_EXPECTED_PROVENANCE_FIELDS)) in prov, "provenance tooltip must state the field count"
+    for f in _EXPECTED_PROVENANCE_FIELDS:
+        assert f in prov, f"provenance tooltip must enumerate {f!r}"
+
+    fit = content["fit_split"]
+    assert "size_vram/size" in fit
+    for word in ("fit", "partial", "offload", "12 GB"):
+        assert word in fit, f"fit_split tooltip must mention {word!r}"
+
+    ctx = content["context"]
+    assert "advertised" in ctx and "achieved" in ctx
+    think_lc = content["think"].lower()
+    assert "reasoning" in think_lc and "no" in think_lc and "yes" in think_lc
+    assert "throughput" in content["tokens_per_sec"]
+    assert "first output token" in content["ttft"]
+    assert "generation time" in content["latency"]
+
+
+def test_tooltip_trigger_has_no_inline_handlers_or_styles(node_available):
+    script = textwrap.dedent("""\
+        const { tipSpan } = await import('./static/js/modelbench/markup.js');
+        const keys = %s;
+        const spans = keys.map((k) => tipSpan(k)).join('\\n');
+        console.log(JSON.stringify({ spans }));
+    """ % json.dumps(_TOOLTIP_KEYS))
+    span_markup = _run_node(script)["spans"]
+    assert "tabindex=\"0\"" in span_markup, "trigger must be keyboard-focusable"
+    assert re.search(r"\son\w+\s*=\s*['\"]", span_markup, re.I) is None
+    assert "style=" not in span_markup, "tooltip trigger must carry no inline style"
+
+
+# ── CSP guard ──────────────────────────────────────────────────────
+
+def test_modelbench_markup_no_inline_handlers_or_scripts(node_available):
+    # Everything the tooltip/interpretability change injects (models table,
+    # metric blocks, tooltip spans) must stay inside the CSP nonce contract:
+    # no inline on*= event-handler attributes, no <script> elements, no new
+    # external script src.
+    script = textwrap.dedent("""\
+        const { modelsTableHtml, metricBlockHtml, tipSpan } = await import('./static/js/modelbench/markup.js');
+        const fmt = (v) => String(v);
+        const sample = { mean: 12.3, min: 1, max: 99, count: 20, percentiles: { p50: 11, p99: 88 } };
+        const table = modelsTableHtml([{
+          model_tag: 'llama3:8b', true_params: '8B', quant: 'Q4_K_M',
+          sample_count: 7, think: { false: 2, true: 5 },
+          fit_split: { fit: 1, partial: 2, offload: 0 },
+          ctx: { advertised: 8192, achieved: 8192, achieved_swept: true },
+          provenance: { complete: 7, total: 7 },
+        }], null);
+        const tps = metricBlockHtml('Tokens/sec', 'tokens_per_sec', sample, fmt);
+        const ttft = metricBlockHtml('TTFT (ms)', 'ttft', sample, fmt);
+        const lat = metricBlockHtml('Latency (ms)', 'latency', sample, fmt);
+        const tips = ['think','provenance','fit_split','context','tokens_per_sec','ttft','latency'].map((k) => tipSpan(k)).join('');
+        console.log(JSON.stringify({ combined: table + tps + ttft + lat + tips }));
+    """)
+    combined = _run_node(script)["combined"].lower()
+    assert re.search(r"\son\w+\s*=\s*['\"]", combined) is None, "inline on*= handler injected"
+    assert "<script" not in combined, "a <script> element was injected"
+    assert "http://" not in combined and "https://" not in combined, \
+        "external script src injected"
+
+
+def test_modelbench_js_source_has_no_script_injection_or_inline_handlers(node_available):
+    # Source-level guard: the modelbench frontend files we touch must not grow
+    # script injection or inline HTML event-handler attributes (CSP contract).
+    jsdir = _REPO / "static/js/modelbench"
+    for name in ("index.js", "markup.js", "format.js", "api.js", "state.js", "runner.js"):
+        src = (jsdir / name).read_text(encoding="utf-8")
+        # Drop full-line // comment lines so prose that merely *mentions*
+        # "<script>" (e.g. the CSP note in markup.js) does not trip the check.
+        code = "\n".join(l for l in src.splitlines() if not l.strip().startswith("//"))
+        assert "createElement('script')" not in code, name
+        assert "document.write" not in code, name
+        assert "new Function(" not in code, name
+        assert re.search(r"<script\s", code) is None, name
+        assert re.search(r"\son\w+\s*=\s*['\"]", code, re.I) is None, name
+

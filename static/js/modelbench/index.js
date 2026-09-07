@@ -5,7 +5,8 @@
 // has no minimize-to-chip state — closing removes it entirely.
 
 import state, { reset } from './state.js';
-import { fmtTps, fmtMs, fmtCtx, fitColor, ctxCliffClass, barPct } from './format.js';
+import { fmtTps, fmtMs, fmtCtx, fitColor } from './format.js';
+import { modelsTableHtml, metricBlockHtml } from './markup.js';
 import { modelsUrl, metricsUrl, samplesUrl, sampleUrl, runsUrl, runUrl, runCancelUrl, ollamaModelsUrl, pullUrl } from './api.js';
 import { createRunner, isTerminal, progressPct, pullProgressPct } from './runner.js';
 import { makeWindowDraggable } from '../windowDrag.js';
@@ -748,14 +749,6 @@ async function _loadModels() {
   }
 }
 
-function _fitSplitBadgesHtml(split) {
-  return ['fit', 'partial', 'offload'].map((k) => {
-    const n = split[k] || 0;
-    const c = fitColor(k);
-    return `<span class="modelbench-fit-badge" style="color:${c};border-color:${c};">${k} ${n}</span>`;
-  }).join(' ');
-}
-
 function _renderModelsTable(data) {
   const wrap = document.getElementById('mb-models-table-wrap');
   if (!wrap) return;
@@ -764,31 +757,10 @@ function _renderModelsTable(data) {
     wrap.innerHTML = '<div class="modelbench-empty">No samples yet</div>';
     return;
   }
-  let html = '<table class="modelbench-table" aria-label="Model summary"><thead><tr>' +
-    '<th scope="col">Model</th><th scope="col">Params</th><th scope="col">Quant</th>' +
-    '<th scope="col">Samples</th><th scope="col">Think (no / yes)</th><th scope="col">Fit split</th>' +
-    '<th scope="col">Context (advertised → achieved)</th><th scope="col">Provenance</th>' +
-    '</tr></thead><tbody>';
-  for (const m of models) {
-    const cliff = ctxCliffClass(m.ctx.advertised, m.ctx.achieved, m.ctx.achieved_swept);
-    const ctxText = m.ctx.achieved_swept
-      ? `${fmtCtx(m.ctx.advertised)} → ${fmtCtx(m.ctx.achieved)}`
-      : `${fmtCtx(m.ctx.advertised)} → not yet measured`;
-    const cliffNote = cliff === 'cliff' ? ' <span class="modelbench-cliff-flag">cliff</span>' : '';
-    const active = state.filters.model === m.model_tag ? ' modelbench-row-active' : '';
-    html += `<tr class="modelbench-model-row${active}" data-model="${escapeHtml(m.model_tag)}" tabindex="0" role="button" aria-label="Show metrics for ${escapeHtml(m.model_tag)}">` +
-      `<td>${escapeHtml(m.model_tag)}</td>` +
-      `<td>${escapeHtml(String(m.true_params ?? '—'))}</td>` +
-      `<td>${escapeHtml(String(m.quant ?? '—'))}</td>` +
-      `<td>${m.sample_count}</td>` +
-      `<td>${m.think.false} / ${m.think.true}</td>` +
-      `<td>${_fitSplitBadgesHtml(m.fit_split)}</td>` +
-      `<td class="modelbench-ctx-cell modelbench-ctx-${cliff}">${ctxText}${cliffNote}</td>` +
-      `<td>${m.provenance.complete}/${m.provenance.total}</td>` +
-      '</tr>';
-  }
-  html += '</tbody></table>';
-  wrap.innerHTML = html;
+  // Table markup — headers with ?-tooltips, the unambiguous labeled think
+  // split, fit badges, ctx column and provenance — is built in markup.js so
+  // the exact shipped HTML is unit-testable under plain node.
+  wrap.innerHTML = modelsTableHtml(models, state.filters.model);
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -817,26 +789,6 @@ async function _loadMetricsForModel(tag) {
   }
 }
 
-function _metricBlockHtml(label, m, fmt) {
-  if (!m) {
-    return `<div class="modelbench-metric-block"><div class="modelbench-metric-label">${escapeHtml(label)}</div><div class="modelbench-empty">No data</div></div>`;
-  }
-  const max = m.max;
-  const rows = [['mean', m.mean], ...Object.entries(m.percentiles)];
-  const barsHtml = rows.map(([tag, v]) => {
-    const pct = barPct(v, max);
-    return '<div class="modelbench-bar-row">' +
-      `<span class="modelbench-bar-tag">${escapeHtml(tag)}</span>` +
-      `<span class="modelbench-bar-track"><span class="modelbench-bar-fill" style="width:${pct}%"></span></span>` +
-      `<span class="modelbench-bar-value">${fmt(v)}</span>` +
-      '</div>';
-  }).join('');
-  return '<div class="modelbench-metric-block">' +
-    `<div class="modelbench-metric-label">${escapeHtml(label)} <span class="modelbench-metric-meta">min ${fmt(m.min)} · max ${fmt(m.max)} · n=${m.count}</span></div>` +
-    barsHtml +
-    '</div>';
-}
-
 function _renderMetrics(data) {
   const body = document.getElementById('mb-metrics-body');
   if (!body) return;
@@ -850,9 +802,9 @@ function _renderMetrics(data) {
     const label = g.think === true ? 'Think' : g.think === false ? 'No-think' : 'Unknown';
     html += '<div class="modelbench-metric-group">' +
       `<h6 class="modelbench-metric-group-title">${escapeHtml(label)} <span class="modelbench-metric-count">(${g.count} samples)</span></h6>` +
-      _metricBlockHtml('Tokens/sec', g.metrics.tokens_per_sec, fmtTps) +
-      _metricBlockHtml('TTFT (ms)', g.metrics.ttft_ms, fmtMs) +
-      _metricBlockHtml('Latency (ms)', g.metrics.latency_ms, fmtMs) +
+      metricBlockHtml('Tokens/sec', 'tokens_per_sec', g.metrics.tokens_per_sec, fmtTps) +
+      metricBlockHtml('TTFT (ms)', 'ttft', g.metrics.ttft_ms, fmtMs) +
+      metricBlockHtml('Latency (ms)', 'latency', g.metrics.latency_ms, fmtMs) +
       '</div>';
   }
   body.innerHTML = html;
