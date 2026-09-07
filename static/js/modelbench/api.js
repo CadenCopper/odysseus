@@ -37,3 +37,28 @@ export function samplesUrl({ model, think, fit, limit, offset } = {}) {
 export function sampleUrl(runId) {
   return `${BASE}/samples/${encodeURIComponent(runId)}`;
 }
+
+/** POST /api/modelbench/runs, GET /api/modelbench/runs */
+export function runsUrl() {
+  return `${BASE}/runs`;
+}
+
+/** GET /api/modelbench/runs/{job_id} */
+export function runUrl(jobId) {
+  return `${BASE}/runs/${encodeURIComponent(jobId)}`;
+}
+
+/** POST /api/modelbench/runs/{job_id}/cancel */
+export function runCancelUrl(jobId) {
+  return `${BASE}/runs/${encodeURIComponent(jobId)}/cancel`;
+}
+
+/** GET /api/modelbench/ollama/models */
+export function ollamaModelsUrl() {
+  return `${BASE}/ollama/models`;
+}
+
+/** POST /api/modelbench/ollama/models/{tag}/pull */
+export function pullUrl(tag) {
+  return `${BASE}/ollama/models/${encodeURIComponent(tag)}/pull`;
+}

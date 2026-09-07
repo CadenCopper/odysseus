@@ -6,7 +6,8 @@
 
 import state, { reset } from './state.js';
 import { fmtTps, fmtMs, fmtCtx, fitColor, ctxCliffClass, barPct } from './format.js';
-import { modelsUrl, metricsUrl, samplesUrl, sampleUrl } from './api.js';
+import { modelsUrl, metricsUrl, samplesUrl, sampleUrl, runsUrl, runUrl, runCancelUrl, ollamaModelsUrl, pullUrl } from './api.js';
+import { createRunner, isTerminal, progressPct, pullProgressPct } from './runner.js';
 import { makeWindowDraggable } from '../windowDrag.js';
 import { topToolWindowZ } from '../toolWindowZOrder.js';
 import { applyEdgeDock, clearDockSide } from '../modalSnap.js';
@@ -37,6 +38,73 @@ async function fetchJSON(url) {
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return res.json();
 }
+
+async function postJSON(url, body) {
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body ?? {}),
+  });
+  let data = {};
+  try { data = await res.json(); } catch (_) { /* empty body */ }
+  if (!res.ok) {
+    const err = new Error(data.detail || `${res.status} ${res.statusText}`);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+/** Streamed SSE pull: yields one parsed JSON object per `data: ` line. */
+async function* _streamPull(tag, confirm) {
+  const res = await fetch(state.API_BASE + pullUrl(tag), {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ confirm: !!confirm }),
+  });
+  if (!res.ok || !res.body) {
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const data = await res.json();
+      detail = data.detail || detail;
+    } catch (_) { /* non-JSON error body */ }
+    const err = new Error(detail);
+    err.status = res.status;
+    throw err;
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    while ((idx = buf.indexOf('\n\n')) !== -1) {
+      const chunk = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      const line = chunk.split('\n').find((l) => l.startsWith('data: '));
+      if (!line) continue;
+      try {
+        yield JSON.parse(line.slice(6));
+      } catch (_) { /* malformed frame */ }
+    }
+  }
+}
+
+const _runner = createRunner({
+  startRun: (params) => postJSON(state.API_BASE + runsUrl(), params),
+  pollRun: (jobId) => fetchJSON(state.API_BASE + runUrl(jobId)),
+  cancelRun: (jobId) => postJSON(state.API_BASE + runCancelUrl(jobId), {}),
+  startPull: (tag, confirm) => _streamPull(tag, confirm),
+  refresh: () => refresh(),
+  onJobChange: _renderRunnerJob,
+  onPullChange: _renderRunnerPull,
+});
+
+let _runnerThink = false;
 
 // ────────────────────────────────────────────────────────────────────────────
 // ── public API ──
@@ -70,6 +138,7 @@ function open() {
   };
   document.addEventListener('keydown', _keydownHandler);
   refresh();
+  _loadOllamaModels();
 }
 
 function close() {
@@ -145,6 +214,37 @@ function _mountPanel() {
     </div>
     <div class="modelbench-banner" id="mb-error-banner" role="alert" style="display:none"></div>
     <div class="modelbench-body">
+      <section class="modelbench-section modelbench-runner-section" id="mb-runner-section">
+        <h5 class="modelbench-section-title">Runner</h5>
+        <div class="modelbench-runner-row">
+          <label class="modelbench-runner-label" for="mb-runner-model">Model</label>
+          <select id="mb-runner-model" aria-label="Select model to run">
+            <option value="">Select a model…</option>
+          </select>
+          <button type="button" id="mb-runner-pull-btn" class="modelbench-runner-btn" style="display:none">Pull</button>
+        </div>
+        <div id="mb-runner-model-detail" class="modelbench-runner-model-detail"></div>
+        <div id="mb-runner-pull-progress" class="modelbench-runner-pull-progress" style="display:none"></div>
+        <form id="mb-runner-form" class="modelbench-runner-form">
+          <div class="modelbench-runner-row">
+            <div class="modelbench-think-toggle" id="mb-runner-think-toggle" role="group" aria-label="Think mode for this run">
+              <button type="button" data-think="false" class="active">No-think</button>
+              <button type="button" data-think="true">Think</button>
+            </div>
+            <label class="modelbench-runner-label" for="mb-runner-ctx">Ctx target</label>
+            <input type="number" id="mb-runner-ctx" min="1" placeholder="optional" />
+            <label class="modelbench-runner-label" for="mb-runner-n">Samples</label>
+            <input type="number" id="mb-runner-n" min="1" max="20" value="5" />
+          </div>
+          <textarea id="mb-runner-prompt" class="modelbench-runner-prompt" rows="2" aria-label="Prompt">Write a haiku about context windows</textarea>
+          <div class="modelbench-runner-row modelbench-runner-row-end">
+            <span id="mb-runner-prompt-bytes" class="modelbench-runner-meta"></span>
+            <button type="button" id="mb-runner-cancel-btn" class="modelbench-runner-btn" style="display:none">Cancel</button>
+            <button type="submit" id="mb-runner-run-btn" class="modelbench-runner-btn modelbench-runner-btn-primary">Run</button>
+          </div>
+        </form>
+        <div id="mb-runner-job-panel" class="modelbench-runner-job-panel" style="display:none"></div>
+      </section>
       <section class="modelbench-section">
         <h5 class="modelbench-section-title">Models</h5>
         <div class="modelbench-fit-legend" aria-hidden="true">
@@ -185,6 +285,9 @@ function _mountPanel() {
   _backdropEl = backdrop;
 
   _wirePanelEvents(panel);
+  _wireRunnerEvents(panel);
+  _renderRunnerJob(_runner.getJob());
+  _renderRunnerPull(_runner.getPullState());
   _wireModelbenchWindow(panel);
   if (window.innerWidth > 768) {
     // Restore the last floating geometry when one was saved; only dock right
@@ -435,6 +538,199 @@ function _hideError() {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// ── runner ──
+// ────────────────────────────────────────────────────────────────────────────
+
+function _wireRunnerEvents(panel) {
+  panel.querySelector('#mb-runner-form')?.addEventListener('submit', _onRunnerSubmit);
+  panel.querySelector('#mb-runner-cancel-btn')?.addEventListener('click', _onRunnerCancelClick);
+  panel.querySelector('#mb-runner-pull-btn')?.addEventListener('click', _onRunnerPullClick);
+  panel.querySelector('#mb-runner-model')?.addEventListener('change', _onRunnerModelSelected);
+  panel.querySelector('#mb-runner-prompt')?.addEventListener('input', _updatePromptBytes);
+
+  const thinkToggle = panel.querySelector('#mb-runner-think-toggle');
+  thinkToggle?.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-think]');
+    if (!btn) return;
+    _runnerThink = btn.dataset.think === 'true';
+    thinkToggle.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b === btn));
+  });
+
+  _updatePromptBytes();
+}
+
+async function _loadOllamaModels() {
+  try {
+    const data = await fetchJSON(state.API_BASE + ollamaModelsUrl());
+    state.residentModels = data;
+    _renderRunnerModelSelect();
+  } catch (err) {
+    _showError('Failed to load ollama models: ' + err.message);
+  }
+}
+
+function _renderRunnerModelSelect() {
+  const select = document.getElementById('mb-runner-model');
+  if (!select) return;
+  const resident = (state.residentModels && state.residentModels.models) || [];
+  const residentNames = new Set(resident.map((m) => m.name));
+  const prev = select.value;
+  let html = '<option value="">Select a model…</option>';
+  for (const m of resident) {
+    html += `<option value="${escapeHtml(m.name)}">${escapeHtml(m.name)}${m.has_samples ? ' ✓' : ''}</option>`;
+  }
+  const benchOnly = ((state.models && state.models.models) || []).filter((m) => !residentNames.has(m.model_tag));
+  for (const m of benchOnly) {
+    html += `<option value="${escapeHtml(m.model_tag)}">${escapeHtml(m.model_tag)} (not resident)</option>`;
+  }
+  select.innerHTML = html;
+  if (prev && [...select.options].some((o) => o.value === prev)) select.value = prev;
+  _onRunnerModelSelected();
+}
+
+function _selectedResidentModel() {
+  const select = document.getElementById('mb-runner-model');
+  if (!select || !select.value) return null;
+  const resident = (state.residentModels && state.residentModels.models) || [];
+  return resident.find((m) => m.name === select.value) || null;
+}
+
+function _onRunnerModelSelected() {
+  const select = document.getElementById('mb-runner-model');
+  const detail = document.getElementById('mb-runner-model-detail');
+  const pullBtn = document.getElementById('mb-runner-pull-btn');
+  const ctxInput = document.getElementById('mb-runner-ctx');
+  const tag = select?.value || '';
+  const resident = _selectedResidentModel();
+  if (detail) {
+    if (!tag) {
+      detail.innerHTML = '';
+    } else if (resident) {
+      detail.innerHTML = '<span class="modelbench-runner-badge modelbench-runner-badge-resident">Resident</span> ' +
+        `${escapeHtml(String(resident.parameter_size ?? '—'))} · ${escapeHtml(String(resident.quantization_level ?? '—'))} · ` +
+        `${fmtCtx(resident.context_length)} ctx · ${resident.size_gb ?? '—'} GB`;
+    } else {
+      detail.innerHTML = '<span class="modelbench-runner-badge modelbench-runner-badge-missing">Not resident</span> bench-sampled only';
+    }
+  }
+  if (ctxInput) ctxInput.placeholder = resident?.context_length ? `max ${resident.context_length}` : 'optional';
+  if (pullBtn) pullBtn.style.display = tag && !resident ? '' : 'none';
+}
+
+function _updatePromptBytes() {
+  const ta = document.getElementById('mb-runner-prompt');
+  const out = document.getElementById('mb-runner-prompt-bytes');
+  if (!ta || !out) return;
+  const bytes = new TextEncoder().encode(ta.value || '').length;
+  out.textContent = `${bytes} bytes`;
+}
+
+async function _onRunnerSubmit(e) {
+  e.preventDefault();
+  const select = document.getElementById('mb-runner-model');
+  const ctxInput = document.getElementById('mb-runner-ctx');
+  const nInput = document.getElementById('mb-runner-n');
+  const promptTa = document.getElementById('mb-runner-prompt');
+  const modelTag = select?.value || '';
+  if (!modelTag) {
+    _showError('Select a model to run');
+    return;
+  }
+  const params = {
+    model_tag: modelTag,
+    prompt: promptTa?.value || '',
+    think: _runnerThink,
+    n_samples: nInput?.value ? parseInt(nInput.value, 10) : 5,
+  };
+  const ctxVal = ctxInput?.value ? parseInt(ctxInput.value, 10) : NaN;
+  if (Number.isFinite(ctxVal)) params.ctx_target = ctxVal;
+  try {
+    await _runner.start(params);
+  } catch (err) {
+    _showError('Failed to start run: ' + err.message);
+  }
+}
+
+async function _onRunnerCancelClick() {
+  try {
+    await _runner.cancel();
+  } catch (err) {
+    _showError('Failed to cancel run: ' + err.message);
+  }
+}
+
+async function _onRunnerPullClick() {
+  const select = document.getElementById('mb-runner-model');
+  const tag = select?.value || '';
+  if (!tag) return;
+  await _tryPull(tag, false);
+}
+
+async function _tryPull(tag, confirm) {
+  const result = await _runner.pull(tag, { confirm });
+  if (!result) return; // locked out: a run or another pull is active
+  if (result.errorStatus === 400 && !confirm) {
+    if (window.confirm(`${tag} exceeds the VRAM safety threshold. Pull anyway?`)) {
+      await _tryPull(tag, true);
+    }
+    return;
+  }
+  if (result.error) {
+    _showError('Pull failed: ' + result.error);
+  }
+}
+
+function _setRunnerFormBusy(busy) {
+  const runBtn = document.getElementById('mb-runner-run-btn');
+  const cancelBtn = document.getElementById('mb-runner-cancel-btn');
+  if (runBtn) runBtn.disabled = busy;
+  if (cancelBtn) cancelBtn.style.display = busy ? '' : 'none';
+}
+
+function _renderRunnerJob(job) {
+  const panel = document.getElementById('mb-runner-job-panel');
+  if (!panel) return;
+  if (!job) {
+    panel.style.display = 'none';
+    panel.innerHTML = '';
+    _setRunnerFormBusy(false);
+    return;
+  }
+  panel.style.display = '';
+  const pct = progressPct(job);
+  const terminal = isTerminal(job.status);
+  const statusClass = job.status === 'failed' || job.status === 'cancelled'
+    ? 'modelbench-runner-status-bad'
+    : job.status === 'done' ? 'modelbench-runner-status-ok' : '';
+  panel.innerHTML =
+    `<div class="modelbench-runner-job-status ${statusClass}">${escapeHtml(job.status)}</div>` +
+    `<div class="modelbench-bar-track modelbench-runner-progress-track"><span class="modelbench-bar-fill" style="width:${pct}%"></span></div>` +
+    (job.message ? `<div class="modelbench-runner-job-message">${escapeHtml(job.message)}</div>` : '') +
+    (job.run_id ? `<div class="modelbench-runner-job-meta">run_id: ${escapeHtml(job.run_id)}</div>` : '') +
+    (job.error ? `<div class="modelbench-error-inline">${escapeHtml(job.error)}</div>` : '');
+  _setRunnerFormBusy(!terminal);
+}
+
+function _renderRunnerPull(pullState) {
+  const wrap = document.getElementById('mb-runner-pull-progress');
+  const pullBtn = document.getElementById('mb-runner-pull-btn');
+  if (!wrap) return;
+  if (!pullState) {
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+    return;
+  }
+  wrap.style.display = '';
+  const pct = pullProgressPct(pullState);
+  wrap.innerHTML =
+    `<div class="modelbench-runner-pull-status">${escapeHtml(pullState.status || 'pulling')}` +
+    (pullState.error ? `: ${escapeHtml(pullState.error)}` : '') + '</div>' +
+    `<div class="modelbench-bar-track modelbench-runner-progress-track"><span class="modelbench-bar-fill" style="width:${pct}%"></span></div>`;
+  if (pullBtn) pullBtn.disabled = !pullState.done;
+  if (pullState.done && pullState.ok) _loadOllamaModels();
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // ── models table ──
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -445,6 +741,7 @@ async function _loadModels() {
     const data = await fetchJSON(state.API_BASE + modelsUrl(state.filters.fit));
     state.models = data;
     _renderModelsTable(data);
+    _renderRunnerModelSelect();
   } catch (err) {
     _showError('Failed to load models: ' + err.message);
     if (wrap) wrap.innerHTML = '';

@@ -223,3 +223,225 @@ def test_sample_url_appends_run_id_path(node_available):
     assert out["needs_encoding"] == "/api/modelbench/samples/run%2Fwith%20spaces"
     for url in out.values():
         assert url.startswith("/api/modelbench")
+
+
+def test_runs_url(node_available):
+    script = textwrap.dedent("""
+        const { runsUrl } = await import('./static/js/modelbench/api.js');
+        console.log(JSON.stringify({ runs: runsUrl() }));
+    """)
+    out = _run_node(script)
+    assert out["runs"] == "/api/modelbench/runs"
+
+
+def test_run_url_encodes_job_id(node_available):
+    script = textwrap.dedent("""
+        const { runUrl } = await import('./static/js/modelbench/api.js');
+        console.log(JSON.stringify({
+          plain: runUrl('job-123'),
+          needs_encoding: runUrl('j/ob'),
+        }));
+    """)
+    out = _run_node(script)
+    assert out["plain"] == "/api/modelbench/runs/job-123"
+    assert out["needs_encoding"] == "/api/modelbench/runs/j%2Fob"
+
+
+def test_run_cancel_url_encodes_job_id(node_available):
+    script = textwrap.dedent("""
+        const { runCancelUrl } = await import('./static/js/modelbench/api.js');
+        console.log(JSON.stringify({
+          plain: runCancelUrl('job-123'),
+          needs_encoding: runCancelUrl('j/ob'),
+        }));
+    """)
+    out = _run_node(script)
+    assert out["plain"] == "/api/modelbench/runs/job-123/cancel"
+    assert out["needs_encoding"] == "/api/modelbench/runs/j%2Fob/cancel"
+
+
+def test_ollama_models_url(node_available):
+    script = textwrap.dedent("""
+        const { ollamaModelsUrl } = await import('./static/js/modelbench/api.js');
+        console.log(JSON.stringify({ url: ollamaModelsUrl() }));
+    """)
+    out = _run_node(script)
+    assert out["url"] == "/api/modelbench/ollama/models"
+
+
+def test_pull_url_encodes_tag(node_available):
+    script = textwrap.dedent("""
+        const { pullUrl } = await import('./static/js/modelbench/api.js');
+        console.log(JSON.stringify({
+          plain: pullUrl('llama3:8b'),
+          needs_encoding: pullUrl('my/model:v1'),
+        }));
+    """)
+    out = _run_node(script)
+    assert out["plain"] == "/api/modelbench/ollama/models/llama3%3A8b/pull"
+    assert out["needs_encoding"] == "/api/modelbench/ollama/models/my%2Fmodel%3Av1/pull"
+
+
+# ── runner.js ──────────────────────────────────────────────────────
+# runner.js holds the runner's decision logic (single-run lock, poll
+# terminal-state detection, refresh-on-completion) behind dependency
+# injection so it is testable under plain node with no DOM/fetch.
+
+def test_runner_is_terminal_and_progress_pct(node_available):
+    script = textwrap.dedent("""
+        const { isTerminal, progressPct } = await import('./static/js/modelbench/runner.js');
+        console.log(JSON.stringify({
+          done: isTerminal('done'),
+          failed: isTerminal('failed'),
+          cancelled: isTerminal('cancelled'),
+          queued: isTerminal('queued'),
+          running: isTerminal('running'),
+          pct_zero: progressPct({ progress: 0 }),
+          pct_half: progressPct({ progress: 0.5 }),
+          pct_full: progressPct({ progress: 1 }),
+          pct_over: progressPct({ progress: 1.4 }),
+          pct_negative: progressPct({ progress: -0.2 }),
+          pct_null_job: progressPct(null),
+          pct_missing_progress: progressPct({}),
+        }));
+    """)
+    out = _run_node(script)
+    assert out["done"] is True
+    assert out["failed"] is True
+    assert out["cancelled"] is True
+    assert out["queued"] is False
+    assert out["running"] is False
+    assert out["pct_zero"] == 0
+    assert out["pct_half"] == 50
+    assert out["pct_full"] == 100
+    assert out["pct_over"] == 100
+    assert out["pct_negative"] == 0
+    assert out["pct_null_job"] == 0
+    assert out["pct_missing_progress"] == 0
+
+
+def test_runner_single_run_lock_refuses_concurrent_start(node_available):
+    script = textwrap.dedent("""
+        const { createRunner } = await import('./static/js/modelbench/runner.js');
+        let startCalls = 0;
+        const scheduled = [];
+        const runner = createRunner({
+          startRun: async () => { startCalls++; return { job_id: 'j1', status: 'queued', progress: 0 }; },
+          pollRun: async (id) => ({ job_id: id, status: 'running', progress: 0.5 }),
+          cancelRun: async (id) => ({ job_id: id, status: 'cancelled' }),
+          refresh: async () => {},
+          setTimeoutFn: (fn) => { scheduled.push(fn); return scheduled.length; },
+          clearTimeoutFn: () => {},
+        });
+        const job1 = await runner.start({ model_tag: 'a' });
+        const job2 = await runner.start({ model_tag: 'a' });
+        console.log(JSON.stringify({
+          startCalls,
+          sameJob: job1.job_id === job2.job_id,
+          scheduledCount: scheduled.length,
+          isActive: runner.isActive(),
+        }));
+    """)
+    out = _run_node(script)
+    assert out == {
+        "startCalls": 1,
+        "sameJob": True,
+        "scheduledCount": 1,
+        "isActive": True,
+    }
+
+
+def test_runner_completed_poll_triggers_refresh(node_available):
+    script = textwrap.dedent("""
+        const { createRunner } = await import('./static/js/modelbench/runner.js');
+        let refreshCalls = 0;
+        const scheduled = [];
+        let pollReturn = { job_id: 'j1', status: 'running', progress: 0.2 };
+        const runner = createRunner({
+          startRun: async () => ({ job_id: 'j1', status: 'queued', progress: 0 }),
+          pollRun: async () => pollReturn,
+          cancelRun: async () => ({}),
+          refresh: async () => { refreshCalls++; },
+          setTimeoutFn: (fn) => { scheduled.push(fn); return scheduled.length; },
+          clearTimeoutFn: () => {},
+        });
+        await runner.start({ model_tag: 'a' });
+        pollReturn = { job_id: 'j1', status: 'done', progress: 1 };
+        await scheduled[0]();
+        console.log(JSON.stringify({
+          refreshCalls,
+          isActive: runner.isActive(),
+          status: runner.getJob().status,
+          scheduledCount: scheduled.length,
+        }));
+    """)
+    out = _run_node(script)
+    assert out == {
+        "refreshCalls": 1,
+        "isActive": False,
+        "status": "done",
+        "scheduledCount": 1,
+    }
+
+
+def test_runner_reduce_pull_event_and_pct(node_available):
+    script = textwrap.dedent("""
+        const { reducePullEvent, pullProgressPct } = await import('./static/js/modelbench/runner.js');
+        let state = { status: '', completed: 0, total: 0, done: false, ok: null, error: null };
+        state = reducePullEvent(state, { event: 'started', size_bytes: 4000000000, max_pull_size_gb: 8 });
+        const afterStarted = { ...state, pct: pullProgressPct(state) };
+        state = reducePullEvent(state, { status: 'downloading', completed: 50, total: 100 });
+        const afterProgress = { ...state, pct: pullProgressPct(state) };
+        state = reducePullEvent(state, { event: 'done', ok: true });
+        const afterDone = { ...state, pct: pullProgressPct(state) };
+        console.log(JSON.stringify({
+          afterStartedStatus: afterStarted.status,
+          afterStartedPct: afterStarted.pct,
+          afterProgressPct: afterProgress.pct,
+          afterDoneFlags: { done: afterDone.done, ok: afterDone.ok },
+          zeroTotalPct: pullProgressPct({ completed: 0, total: 0 }),
+          nullStatePct: pullProgressPct(null),
+        }));
+    """)
+    out = _run_node(script)
+    assert out == {
+        "afterStartedStatus": "downloading",
+        "afterStartedPct": 0,
+        "afterProgressPct": 50,
+        "afterDoneFlags": {"done": True, "ok": True},
+        "zeroTotalPct": 0,
+        "nullStatePct": 0,
+    }
+
+
+def test_runner_cancel_path_returns_to_inactive(node_available):
+    script = textwrap.dedent("""
+        const { createRunner } = await import('./static/js/modelbench/runner.js');
+        const scheduled = [];
+        let status = 'running';
+        let cancelCalls = 0;
+        const runner = createRunner({
+          startRun: async () => ({ job_id: 'j1', status: 'queued', progress: 0 }),
+          pollRun: async (id) => ({ job_id: id, status, progress: 0.3 }),
+          cancelRun: async (id) => { cancelCalls++; status = 'cancelled'; return { job_id: id, status }; },
+          refresh: async () => {},
+          setTimeoutFn: (fn) => { scheduled.push(fn); return scheduled.length; },
+          clearTimeoutFn: () => {},
+        });
+        await runner.start({ model_tag: 'a' });
+        const activeBefore = runner.isActive();
+        await runner.cancel();
+        console.log(JSON.stringify({
+          cancelCalls,
+          activeBefore,
+          activeAfter: runner.isActive(),
+          statusAfter: runner.getJob().status,
+        }));
+    """)
+    out = _run_node(script)
+    assert out == {
+        "cancelCalls": 1,
+        "activeBefore": True,
+        "activeAfter": False,
+        "statusAfter": "cancelled",
+    }

@@ -41818,6 +41818,108 @@ body.settings-sidebar-resize-active {
   background: color-mix(in srgb, var(--accent, var(--red)) 15%, transparent);
 }
 
+/* ── Runner section ── */
+.modelbench-runner-section { border-bottom: 1px solid var(--border); padding-bottom: 14px; margin-bottom: 4px; }
+.modelbench-runner-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 6px 0;
+}
+.modelbench-runner-row-end { justify-content: flex-end; }
+.modelbench-runner-label {
+  font-size: 11px;
+  opacity: 0.65;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.modelbench-runner-row select,
+.modelbench-runner-row input[type="number"] {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+#mb-runner-model { flex: 1 1 auto; min-width: 160px; }
+#mb-runner-ctx { width: 90px; }
+#mb-runner-n { width: 60px; }
+.modelbench-runner-model-detail {
+  font-size: 12px;
+  opacity: 0.85;
+  min-height: 18px;
+  margin: 2px 0 6px;
+}
+.modelbench-runner-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-right: 6px;
+}
+.modelbench-runner-badge-resident { background: color-mix(in srgb, var(--green) 18%, transparent); color: var(--green); }
+.modelbench-runner-badge-missing { background: color-mix(in srgb, var(--orange) 18%, transparent); color: var(--orange); }
+.modelbench-runner-prompt {
+  width: 100%;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 12px;
+  font-family: inherit;
+  resize: vertical;
+  box-sizing: border-box;
+}
+.modelbench-runner-meta { font-size: 11px; opacity: 0.55; margin-right: auto; }
+.modelbench-runner-btn {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 5px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.modelbench-runner-btn:hover:not(:disabled) { background: color-mix(in srgb, var(--fg) 8%, transparent); }
+.modelbench-runner-btn:disabled { opacity: 0.5; cursor: default; }
+.modelbench-runner-btn-primary {
+  background: color-mix(in srgb, var(--accent, var(--red)) 20%, transparent);
+  border-color: color-mix(in srgb, var(--accent, var(--red)) 45%, var(--border));
+  font-weight: 600;
+}
+.modelbench-runner-job-panel {
+  margin-top: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+}
+.modelbench-runner-job-status {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 6px;
+}
+.modelbench-runner-job-status.modelbench-runner-status-ok { color: var(--green); }
+.modelbench-runner-job-status.modelbench-runner-status-bad { color: var(--red); }
+.modelbench-runner-job-message { font-size: 12px; opacity: 0.75; margin-top: 6px; }
+.modelbench-runner-job-meta { font-size: 11px; opacity: 0.55; margin-top: 4px; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.modelbench-runner-pull-progress {
+  margin: 6px 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.modelbench-runner-pull-status { font-size: 12px; margin-bottom: 6px; }
+.modelbench-runner-progress-track { width: 100%; }
+
 @media (max-width: 768px) {
   .modelbench-controls select { max-width: 120px; }
   .modelbench-table { font-size: 11px; }
