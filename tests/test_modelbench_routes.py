@@ -96,6 +96,49 @@ def seeded_db():
     Path(tmpfile.name).unlink(missing_ok=True)
 
 
+@pytest.fixture(scope="module")
+def ctx_class_db():
+    """Rows shaped after the live repro models (gpt-oss:20b MXFP4 offload,
+    qwen3:30b-a3b Q4_K_M offload) to exercise the achieved-ctx rule across
+    actual fit classes: an offload-SWEPT group with multiple ctx points, plus
+    a pure-'fit' swept group for regression.
+    """
+    SessionLocal, engine, tmpfile = make_temp_sqlite(Base.metadata)
+    db = SessionLocal()
+    try:
+        rows = [
+            # gpt-oss:20b — offload-swept: ctx doubling 1024 -> 8192, all offload.
+            _row("gpt-001", "gpt-oss:20b", 20.9, "MXFP4", 1024, False, "offload", 6.0, 60.0, 2100.0, 21, seed=21),
+            _row("gpt-002", "gpt-oss:20b", 20.9, "MXFP4", 2048, False, "offload", 6.5, 61.0, 2110.0, 22, seed=22),
+            _row("gpt-003", "gpt-oss:20b", 20.9, "MXFP4", 4096, True, "offload", 7.0, 62.0, 2120.0, 23, seed=23),
+            _row("gpt-004", "gpt-oss:20b", 20.9, "MXFP4", 8192, True, "offload", 7.5, 63.0, 2130.0, 24, seed=24),
+            # qwen3:30b-a3b — offload-swept, higher cap (doubling 2048 -> 16384).
+            _row("qw-001", "qwen3:30b-a3b", 30.5, "Q4_K_M", 2048, False, "offload", 4.0, 70.0, 2200.0, 41, seed=41),
+            _row("qw-002", "qwen3:30b-a3b", 30.5, "Q4_K_M", 4096, False, "offload", 4.2, 71.0, 2210.0, 42, seed=42),
+            _row("qw-003", "qwen3:30b-a3b", 30.5, "Q4_K_M", 8192, True, "offload", 4.4, 72.0, 2220.0, 43, seed=43),
+            _row("qw-004", "qwen3:30b-a3b", 30.5, "Q4_K_M", 16384, True, "offload", 4.6, 73.0, 2230.0, 44, seed=44),
+            # sweet-fit:2b — pure-fit swept model (all rows fit) — regression case.
+            _row("sf-001", "sweet-fit:2b", 2.0, "Q4_K_M", 4096, False, "fit", 30.0, 20.0, 500.0, 51, seed=51),
+            _row("sf-002", "sweet-fit:2b", 2.0, "Q4_K_M", 8192, False, "fit", 29.0, 21.0, 510.0, 52, seed=52),
+            _row("sf-003", "sweet-fit:2b", 2.0, "Q4_K_M", 16384, True, "fit", 28.0, 22.0, 520.0, 53, seed=53),
+        ]
+        db.add_all(rows)
+        db.commit()
+    finally:
+        db.close()
+    yield SessionLocal
+    engine.dispose()
+    Path(tmpfile.name).unlink(missing_ok=True)
+
+
+@pytest.fixture
+def ctx_client(ctx_class_db, monkeypatch):
+    monkeypatch.setattr(mbroutes, "SessionLocal", ctx_class_db)
+    app = FastAPI()
+    app.include_router(mbroutes.setup_modelbench_routes())
+    return TestClient(app, raise_server_exceptions=False)
+
+
 @pytest.fixture
 def client(seeded_db, monkeypatch):
     monkeypatch.setattr(mbroutes, "SessionLocal", seeded_db)
@@ -120,14 +163,16 @@ def test_models_lists_all_models_sorted_with_expected_aggregates(client):
     assert fable["sample_count"] == 10
     assert fable["think"] == {"false": 5, "true": 5}
     assert fable["fit_split"] == {"fit": 3, "partial": 7, "offload": 0}
-    assert fable["ctx"] == {"advertised": 262144, "achieved": 116736, "achieved_swept": True}
+    # Representative fit class is 'partial' (7 rows > 3 fit), so achieved is
+    # the max ctx_len over partial rows (262144), not the fit-only 116736.
+    assert fable["ctx"] == {"advertised": 262144, "achieved": 262144, "achieved_swept": True}
     assert fable["provenance"] == {"complete": 9, "total": 10}
 
     oracle = body["models"][1]
     assert oracle["true_params"] == 27.3
     assert oracle["sample_count"] == 1
-    assert oracle["ctx"]["achieved"] is None
-    assert oracle["ctx"]["achieved_swept"] is False
+    # Single offload row is now the representative class -> reports its ctx.
+    assert oracle["ctx"] == {"advertised": 131072, "achieved": 131072, "achieved_swept": True}
     assert oracle["provenance"] == {"complete": 1, "total": 1}
 
     assert body["meta"] == {
@@ -156,6 +201,71 @@ def test_models_fit_filter_restricts_counts_and_meta(client):
 def test_models_invalid_fit_returns_400(client):
     r = client.get("/api/modelbench/models", params={"fit": "bogus"})
     assert r.status_code == 400
+
+
+# --- achieved-ctx across actual fit class (bug 3a) ------------------------
+
+def test_offload_swept_model_reports_achieved_from_offload_rows(ctx_client):
+    """gpt-oss:20b shape — offload-swept group with multiple ctx_len points
+    must report achieved_swept=true and achieved = the real max ctx_len over
+    its representative (offload) class, advertised intact."""
+    r = ctx_client.get("/api/modelbench/models")
+    assert r.status_code == 200
+    models = {m["model_tag"]: m for m in r.json()["models"]}
+
+    gpt = models["gpt-oss:20b"]
+    assert gpt["fit_split"] == {"fit": 0, "partial": 0, "offload": 4}
+    assert gpt["ctx"] == {
+        "advertised": 8192, "achieved": 8192, "achieved_swept": True,
+    }
+
+    qwen = models["qwen3:30b-a3b"]
+    assert qwen["fit_split"] == {"fit": 0, "partial": 0, "offload": 4}
+    assert qwen["ctx"] == {
+        "advertised": 16384, "achieved": 16384, "achieved_swept": True,
+    }
+
+
+def test_pure_fit_swept_model_unchanged_regression(ctx_client):
+    """sweet-fit:2b shape — every row is 'fit', so the representative class is
+    'fit' and the result must be identical to the old fit-only behaviour:
+    achieved = max ctx_len over fit rows."""
+    r = ctx_client.get("/api/modelbench/models")
+    models = {m["model_tag"]: m for m in r.json()["models"]}
+    sweet = models["sweet-fit:2b"]
+    assert sweet["fit_split"] == {"fit": 3, "partial": 0, "offload": 0}
+    assert sweet["ctx"] == {
+        "advertised": 16384, "achieved": 16384, "achieved_swept": True,
+    }
+
+
+def test_ctx_reports_not_measured_when_no_ctx_in_representative_class():
+    """Rows that carry ctx_len=None across the whole group must report
+    achieved=None / achieved_swept=False (never crash on max of empty), while
+    advertised also stays None."""
+    SessionLocal, engine, tmpfile = make_temp_sqlite(Base.metadata)
+    db = SessionLocal()
+    try:
+        db.add(_row("nc-001", "no-ctx:7b", 7.0, "Q4_K_M", None, False, "fit", 8.0, 80.0, 3000.0, 1, seed=1))
+        db.add(_row("nc-002", "no-ctx:7b", 7.0, "Q4_K_M", None, True, "fit", 9.0, 90.0, 3100.0, 2, seed=2))
+        db.commit()
+    finally:
+        db.close()
+
+    app = FastAPI()
+    app.include_router(mbroutes.setup_modelbench_routes())
+    with TestClient(app, raise_server_exceptions=False) as c:
+        saved = mbroutes.SessionLocal
+        mbroutes.SessionLocal = SessionLocal
+        try:
+            body = c.get("/api/modelbench/models").json()
+        finally:
+            mbroutes.SessionLocal = saved
+    engine.dispose()
+    Path(tmpfile.name).unlink(missing_ok=True)
+
+    noctx = next(m for m in body["models"] if m["model_tag"] == "no-ctx:7b")
+    assert noctx["ctx"] == {"advertised": None, "achieved": None, "achieved_swept": False}
 
 
 # --- GET /api/modelbench/metrics -------------------------------------------

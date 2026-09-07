@@ -136,8 +136,22 @@ def setup_modelbench_routes():
                 group = by_tag[tag]
                 think_true = sum(1 for r in group if r.think is True)
                 think_false = sum(1 for r in group if r.think is False)
-                fit_rows_ctx = [r.ctx_len for r in group if r.vrram_fit == "fit" and r.ctx_len is not None]
                 advertised = [r.ctx_len for r in group if r.ctx_len is not None]
+                # achieved reflects the sweep across the model's ACTUAL fit
+                # class (the vrram_fit value with the most rows in the group),
+                # not only 'fit' rows — otherwise offload/partial models that
+                # DID get ctx-swept still render as "not measured yet".
+                # Ties broken by class name for determinism.
+                fit_counts = {}
+                for r in group:
+                    fit_counts[r.vrram_fit] = fit_counts.get(r.vrram_fit, 0) + 1
+                rep_fit = max(
+                    fit_counts.items(), key=lambda kv: (kv[1], kv[0])
+                )[0] if fit_counts else None
+                rep_fit_ctx = [
+                    r.ctx_len for r in group
+                    if r.vrram_fit == rep_fit and r.ctx_len is not None
+                ] if rep_fit is not None else []
                 complete = sum(1 for r in group if _provenance_complete(r))
                 models.append({
                     "model_tag": tag,
@@ -148,8 +162,8 @@ def setup_modelbench_routes():
                     "fit_split": _fit_split(group),
                     "ctx": {
                         "advertised": max(advertised) if advertised else None,
-                        "achieved": max(fit_rows_ctx) if fit_rows_ctx else None,
-                        "achieved_swept": len(fit_rows_ctx) > 0,
+                        "achieved": max(rep_fit_ctx) if rep_fit_ctx else None,
+                        "achieved_swept": len(rep_fit_ctx) > 0,
                     },
                     "provenance": {"complete": complete, "total": len(group)},
                 })
