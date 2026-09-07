@@ -939,6 +939,37 @@ def _migrate_add_bench_sample_prompt_cols():
             pass
 
 
+def _migrate_add_bench_jobs_ctx_series_column():
+    """Add `ctx_series` (Text, JSON array) to bench_jobs.
+
+    Guarded + idempotent, following the house ALTER pattern: create_all() on a
+    fresh DB auto-adds the column from the ORM, so this guard only needs to
+    cover the SQLite ALTER path when create_all misses an existing table. The
+    column is nullable, so legacy rows keep NULL (no backfill) -- NULL is the
+    backward-compatible "use ctx_sweep_points(cap)" signal in the runner.
+    """
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("PRAGMA table_info(bench_jobs)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "ctx_series" not in columns:
+            conn.execute("ALTER TABLE bench_jobs ADD COLUMN ctx_series TEXT")
+        conn.commit()
+        logging.getLogger(__name__).info("Migrated: added ctx_series to bench_jobs")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"bench_jobs ctx_series migration failed: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
 class BenchJob(Base):
     """Single-concurrency ModelBench in-dashboard test-run job.
 
@@ -955,6 +986,11 @@ class BenchJob(Base):
     model_tag = Column(String(255), nullable=False)
     think = Column(Boolean, nullable=True)
     ctx_target = Column(Integer, nullable=True)
+    # User-controllable ctx-window sweep SERIES (card MB-Dash-3b). A JSON
+    # array of integer ctx lengths the runner uses verbatim for the sweep
+    # loop; NULL/absent keeps the backward-compatible ctx_sweep_points(cap)
+    # doubling fallback. Serialized by job_registry encode/decode helpers.
+    ctx_series = Column(Text, nullable=True)
     prompt = Column(Text, nullable=False)
     n_samples = Column(Integer, nullable=False)
     progress = Column(Float, nullable=False, default=0.0)  # 0..1
@@ -2250,6 +2286,7 @@ def init_db():
     _migrate_encrypt_endpoint_keys()
     _migrate_backfill_task_folders()
     _migrate_add_bench_sample_prompt_cols()
+    _migrate_add_bench_jobs_ctx_series_column()
 
 
 def _migrate_backfill_task_folders():

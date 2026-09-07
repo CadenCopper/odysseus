@@ -8,6 +8,7 @@ cancel, and stale-heartbeat reconciliation.
 """
 
 import asyncio
+import json
 import logging
 import uuid
 
@@ -36,6 +37,32 @@ def _now():
     return utcnow_naive()
 
 
+def encode_ctx_series(series):
+    """Serialize a ctx_series list to its JSON column form (None -> None).
+
+    ``series`` is the validated list of ints from the runs API; None keeps the
+    column NULL (backward-compatible fallback in the runner).
+    """
+    if series is None:
+        return None
+    return json.dumps(series)
+
+
+def decode_ctx_series(raw):
+    """Parse a ctx_series JSON column value back to a list (None/empty -> None).
+
+    Tolerant of a missing/invalid value so a malformed row degrades to the
+    backward-compatible ctx_sweep_points(cap) fallback instead of crashing.
+    """
+    if not raw:
+        return None
+    try:
+        val = json.loads(raw)
+    except (ValueError, TypeError):
+        return None
+    return val if isinstance(val, list) else None
+
+
 def _serialize(row):
     """Convert a BenchJob row to a plain dict with isoformat datetimes."""
 
@@ -50,6 +77,7 @@ def _serialize(row):
         "model_tag": row.model_tag,
         "think": row.think,
         "ctx_target": row.ctx_target,
+        "ctx_series": decode_ctx_series(row.ctx_series),
         "prompt": row.prompt,
         "n_samples": row.n_samples,
         "progress": row.progress,
@@ -168,7 +196,7 @@ class BenchJobRegistry:
         """
         return bool(self._running)
 
-    async def submit(self, *, model_tag, think=None, ctx_target=None, prompt, n_samples) -> dict:
+    async def submit(self, *, model_tag, think=None, ctx_target=None, ctx_series=None, prompt, n_samples) -> dict:
         """Create a queued BenchJob row and schedule its dispatch.
 
         Raises ConcurrentJobError if a run is already queued or running.
@@ -187,6 +215,7 @@ class BenchJobRegistry:
                 model_tag=model_tag,
                 think=think,
                 ctx_target=ctx_target,
+                ctx_series=encode_ctx_series(ctx_series),
                 prompt=prompt,
                 n_samples=n_samples,
                 progress=0.0,

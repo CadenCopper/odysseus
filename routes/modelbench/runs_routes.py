@@ -23,7 +23,12 @@ from fastapi import APIRouter, HTTPException, Request
 
 from services.modelbench.job_registry import ConcurrentJobError
 from services.modelbench.ollama_client import OllamaClient, OllamaUnreachable
-from services.modelbench.runner import MAX_SAMPLES, MIN_SAMPLES, effective_ctx_cap
+from services.modelbench.runner import (
+    MAX_CTX_SWEEP_PROBES,
+    MAX_SAMPLES,
+    MIN_SAMPLES,
+    effective_ctx_cap,
+)
 from src.auth_helpers import require_authenticated_request
 
 logger = logging.getLogger(__name__)
@@ -32,7 +37,8 @@ logger = logging.getLogger(__name__)
 # heartbeat_at are required; job_id + the submitted params are fine to include.
 _POLL_FIELDS = (
     "job_id", "status", "progress", "message", "run_id", "error",
-    "heartbeat_at", "model_tag", "think", "ctx_target", "n_samples",
+    "heartbeat_at", "model_tag", "think", "ctx_target", "ctx_series",
+    "n_samples",
 )
 
 
@@ -91,6 +97,20 @@ def _validate_start_body(body: dict) -> None:
         if ctx_target < 1:
             raise _bad_request("ctx_target must be >= 1")
 
+    ctx_series = body.get("ctx_series")
+    if ctx_series is not None:
+        if not isinstance(ctx_series, list):
+            raise _bad_request("ctx_series must be a list of integers")
+        if len(ctx_series) > MAX_CTX_SWEEP_PROBES:
+            raise _bad_request(
+                f"ctx_series must have at most {MAX_CTX_SWEEP_PROBES} points"
+            )
+        for i, point in enumerate(ctx_series):
+            if not isinstance(point, int) or isinstance(point, bool):
+                raise _bad_request(f"ctx_series[{i}] must be an integer")
+            if point < 1:
+                raise _bad_request(f"ctx_series[{i}] must be >= 1")
+
 
 def setup_runs_routes(
     bench_registry: Any,
@@ -124,22 +144,30 @@ def setup_runs_routes(
         think = body["think"]
         n_samples = body["n_samples"]
         ctx_target = body.get("ctx_target")
+        ctx_series = body.get("ctx_series")
 
         resident = await _resolve_resident_model(factory, model_tag)
 
-        if ctx_target is not None:
+        if ctx_target is not None or ctx_series is not None:
             details = resident.get("details") or {}
             cap = effective_ctx_cap(model_tag, details.get("context_length"))
-            if ctx_target > cap:
+            if ctx_target is not None and ctx_target > cap:
                 raise _bad_request(
                     f"ctx_target {ctx_target} exceeds the model's safety cap ({cap})"
                 )
+            if ctx_series is not None:
+                for point in ctx_series:
+                    if point > cap:
+                        raise _bad_request(
+                            f"ctx_series point {point} exceeds the model's safety cap ({cap})"
+                        )
 
         try:
             job = await bench_registry.submit(
                 model_tag=model_tag,
                 think=think,
                 ctx_target=ctx_target,
+                ctx_series=ctx_series,
                 prompt=prompt,
                 n_samples=n_samples,
             )

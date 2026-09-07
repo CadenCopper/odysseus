@@ -24,7 +24,7 @@ import httpx
 
 from core import database as core_db
 from core.database import BenchJob, BenchSample
-from services.modelbench.job_registry import JobContext
+from services.modelbench.job_registry import JobContext, decode_ctx_series
 
 logger = logging.getLogger(__name__)
 
@@ -248,6 +248,21 @@ def ctx_sweep_points(cap: int, max_probes: int = MAX_CTX_SWEEP_PROBES) -> list:
     return points[:max_probes]
 
 
+def resolve_sweep_points(series_raw, cap: int) -> list:
+    """Pick the ctx sweep points for run_bench's sweep loop.
+
+    When the BenchJob row carries a user-controllable ``ctx_series`` (JSON
+    list, already cap-validated at the runs API), the sweep uses exactly those
+    points. Otherwise it falls back to the backward-compatible doubling
+    sequence ``ctx_sweep_points(cap)``. Tolerates a missing/empty/malformed
+    value by degrading to the fallback.
+    """
+    series = decode_ctx_series(series_raw)
+    if series:
+        return series
+    return ctx_sweep_points(cap)
+
+
 def sample_run_id(base_run_id: str, label: str) -> str:
     """A distinct, deterministic bench_samples.run_id (PK) for one sample.
 
@@ -438,6 +453,7 @@ async def run_bench(ctx: "JobContext", *, client: httpx.AsyncClient | None = Non
             model_tag = job.model_tag
             think_pref = job.think
             ctx_target_req = job.ctx_target
+            ctx_series_req = job.ctx_series
             prompt = job.prompt
             n_samples = job.n_samples
         finally:
@@ -497,8 +513,9 @@ async def run_bench(ctx: "JobContext", *, client: httpx.AsyncClient | None = Non
                     (i + 1) / (n_samples * 2), f"token test {i + 1}/{n_samples}"
                 )
 
-            # CTX SWEEP
-            sweep_points = ctx_sweep_points(cap)
+            # CTX SWEEP — uses the user-controllable ctx_series when the job
+            # carries one; otherwise the backward-compatible doubling fallback.
+            sweep_points = resolve_sweep_points(ctx_series_req, cap)
             baseline_fit = None
             for j, sweep_ctx_len in enumerate(sweep_points):
                 await ctx.check_cancelled()

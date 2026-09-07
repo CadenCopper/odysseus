@@ -46,7 +46,7 @@ def cleanup(engine, tmpfile):
 
 
 def make_job(session_local, *, model_tag="test-model:latest", think=None,
-             ctx_target=None, prompt="Say hello.", n_samples=2):
+             ctx_target=None, ctx_series=None, prompt="Say hello.", n_samples=2):
     db = session_local()
     try:
         job = BenchJob(
@@ -56,6 +56,7 @@ def make_job(session_local, *, model_tag="test-model:latest", think=None,
             model_tag=model_tag,
             think=think,
             ctx_target=ctx_target,
+            ctx_series=ctx_series,
             prompt=prompt,
             n_samples=n_samples,
             progress=0.0,
@@ -204,6 +205,19 @@ def test_ctx_sweep_points_bounded_and_increasing():
 def test_ctx_sweep_points_small_cap_is_short():
     points = runner.ctx_sweep_points(100)
     assert points == [100]
+
+
+def test_resolve_sweep_points_uses_provided_series():
+    # A cap-validated user series (JSON in the row) is used verbatim.
+    assert runner.resolve_sweep_points("[512, 768]", 200_000) == [512, 768]
+
+
+def test_resolve_sweep_points_falls_back_when_absent():
+    # NULL / empty / malformed all degrade to the doubling fallback.
+    assert runner.resolve_sweep_points(None, 2048) == runner.ctx_sweep_points(2048)
+    assert runner.resolve_sweep_points("", 2048) == runner.ctx_sweep_points(2048)
+    assert runner.resolve_sweep_points("not json", 2048) == runner.ctx_sweep_points(2048)
+    assert runner.resolve_sweep_points("{}", 2048) == runner.ctx_sweep_points(2048)
 
 
 # ---------------------------------------------------------------------------
@@ -601,6 +615,68 @@ async def test_content_templated_model_records_requested_think_class(monkeypatch
         assert row.content_tokens == runner.estimate_tokens("The answer is 42.")
         assert row.collector == "gui-runner"
         assert row.prompt_text == "Say hello."
+    finally:
+        cleanup(engine, tmpfile)
+
+
+# ---------------------------------------------------------------------------
+# User-controllable ctx sweep series (MB-Dash-3b)
+# ---------------------------------------------------------------------------
+
+async def test_run_bench_uses_provided_ctx_series_for_sweep(monkeypatch):
+    """A job carrying a user ctx_series runs the sweep loop at exactly those
+    points (no implicit doubling) -- acceptance (d)."""
+    session_local, engine, tmpfile = make_db(monkeypatch)
+    try:
+        # n_samples=1 token test, then the user's sweep [512, 768].
+        job_id = make_job(session_local, ctx_series="[512, 768]", n_samples=1)
+        ctx = make_ctx(job_id)
+
+        num_ctx_calls = []
+
+        def capturing_handler(request):
+            num_ctx_calls.append(json.loads(request.content)["options"]["num_ctx"])
+            return httpx.Response(200, content=ndjson_chat_response(
+                thinking_deltas=["thinking a bit "], content_deltas=["ok"],
+            ))
+
+        client = make_client(capturing_handler)
+        try:
+            await runner.run_bench(ctx, client=client)
+        finally:
+            await client.aclose()
+
+        # First num_ctx is the token test (ctx_target); the rest are the sweep.
+        assert num_ctx_calls[1:] == [512, 768]
+    finally:
+        cleanup(engine, tmpfile)
+
+
+async def test_run_bench_without_ctx_series_uses_doubling_fallback(monkeypatch):
+    """A job without ctx_series keeps the backward-compatible ctx_sweep_points
+    sweep -- acceptance (e)."""
+    session_local, engine, tmpfile = make_db(monkeypatch)
+    try:
+        job_id = make_job(session_local, n_samples=1)  # no ctx_series
+        ctx = make_ctx(job_id)
+
+        num_ctx_calls = []
+
+        def capturing_handler(request):
+            num_ctx_calls.append(json.loads(request.content)["options"]["num_ctx"])
+            return httpx.Response(200, content=ndjson_chat_response(
+                thinking_deltas=["thinking a bit "], content_deltas=["ok"],
+            ))
+
+        client = make_client(capturing_handler)
+        try:
+            await runner.run_bench(ctx, client=client)
+        finally:
+            await client.aclose()
+
+        # test-model:latest context_length=2048 -> cap=2048.
+        cap = runner.effective_ctx_cap("test-model:latest", 2048)
+        assert num_ctx_calls[1:] == runner.ctx_sweep_points(cap)
     finally:
         cleanup(engine, tmpfile)
 
