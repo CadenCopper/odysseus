@@ -268,6 +268,47 @@ def test_ctx_reports_not_measured_when_no_ctx_in_representative_class():
     assert noctx["ctx"] == {"advertised": None, "achieved": None, "achieved_swept": False}
 
 
+def test_ctx_less_majority_class_does_not_mask_swept_minority():
+    """The measured fit class is the mode across rows that CARRY a ctx_len.
+    If a model's row-count majority is a fit class whose rows were never
+    ctx-swept (ctx_len=None) while an 'offload' minority WAS swept, achieved
+    must still reflect the swept offload rows — a naive mode over all rows
+    would pick 'fit' (the count majority) and wrongly report 'not measured'."""
+    SessionLocal, engine, tmpfile = make_temp_sqlite(Base.metadata)
+    db = SessionLocal()
+    try:
+        # hybrid:11b — 3 fit rows with ctx_len=None (unswept) + 2 offload rows
+        # across a doubling sweep (4096 -> 8192). Row-count majority = fit.
+        db.add(_row("hy-001", "hybrid:11b", 11.0, "Q4_K_M", None, False, "fit", 8.0, 80.0, 3000.0, 1, seed=1))
+        db.add(_row("hy-002", "hybrid:11b", 11.0, "Q4_K_M", None, True, "fit", 8.0, 80.0, 3000.0, 2, seed=2))
+        db.add(_row("hy-003", "hybrid:11b", 11.0, "Q4_K_M", None, True, "fit", 8.0, 80.0, 3000.0, 3, seed=3))
+        db.add(_row("hy-004", "hybrid:11b", 11.0, "Q4_K_M", 4096, False, "offload", 4.0, 90.0, 3100.0, 4, seed=4))
+        db.add(_row("hy-005", "hybrid:11b", 11.0, "Q4_K_M", 8192, False, "offload", 4.0, 90.0, 3100.0, 5, seed=5))
+        db.commit()
+    finally:
+        db.close()
+
+    app = FastAPI()
+    app.include_router(mbroutes.setup_modelbench_routes())
+    with TestClient(app, raise_server_exceptions=False) as c:
+        saved = mbroutes.SessionLocal
+        mbroutes.SessionLocal = SessionLocal
+        try:
+            body = c.get("/api/modelbench/models").json()
+        finally:
+            mbroutes.SessionLocal = saved
+    engine.dispose()
+    Path(tmpfile.name).unlink(missing_ok=True)
+
+    hybrid = next(m for m in body["models"] if m["model_tag"] == "hybrid:11b")
+    # fit_split counts ALL rows (3 fit / 2 offload) but the measured fit class
+    # is 'offload' (the only class that carries a ctx sweep).
+    assert hybrid["fit_split"] == {"fit": 3, "partial": 0, "offload": 2}
+    assert hybrid["ctx"] == {
+        "advertised": 8192, "achieved": 8192, "achieved_swept": True,
+    }
+
+
 # --- GET /api/modelbench/metrics -------------------------------------------
 
 def test_metrics_default_percentiles_recomputed_and_grouped_by_think(client):

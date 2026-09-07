@@ -138,20 +138,24 @@ def setup_modelbench_routes():
                 think_false = sum(1 for r in group if r.think is False)
                 advertised = [r.ctx_len for r in group if r.ctx_len is not None]
                 # achieved reflects the sweep across the model's ACTUAL fit
-                # class (the vrram_fit value with the most rows in the group),
-                # not only 'fit' rows — otherwise offload/partial models that
-                # DID get ctx-swept still render as "not measured yet".
-                # Ties broken by class name for determinism.
+                # class — the class the ctx sweep ran under — not only 'fit'
+                # rows. The measured class is the mode of vrram_fit across the
+                # rows that carry a (non-null) ctx_len: rows with ctx_len=None
+                # were never swept and must not skew which class is measured,
+                # else an offload/partial model that DID get ctx-swept (e.g.
+                # gpt-oss:20b, qwen3:30b-a3b) still renders as "not measured
+                # yet". Ties broken by class name for determinism.
+                ctx_rows = [r for r in group if r.ctx_len is not None]
                 fit_counts = {}
-                for r in group:
+                for r in ctx_rows:
                     fit_counts[r.vrram_fit] = fit_counts.get(r.vrram_fit, 0) + 1
-                rep_fit = max(
+                measured_fit = max(
                     fit_counts.items(), key=lambda kv: (kv[1], kv[0])
                 )[0] if fit_counts else None
-                rep_fit_ctx = [
-                    r.ctx_len for r in group
-                    if r.vrram_fit == rep_fit and r.ctx_len is not None
-                ] if rep_fit is not None else []
+                measured_fit_ctx = [
+                    r.ctx_len for r in ctx_rows
+                    if r.vrram_fit == measured_fit
+                ] if measured_fit is not None else []
                 complete = sum(1 for r in group if _provenance_complete(r))
                 models.append({
                     "model_tag": tag,
@@ -162,8 +166,8 @@ def setup_modelbench_routes():
                     "fit_split": _fit_split(group),
                     "ctx": {
                         "advertised": max(advertised) if advertised else None,
-                        "achieved": max(rep_fit_ctx) if rep_fit_ctx else None,
-                        "achieved_swept": len(rep_fit_ctx) > 0,
+                        "achieved": max(measured_fit_ctx) if measured_fit_ctx else None,
+                        "achieved_swept": len(measured_fit_ctx) > 0,
                     },
                     "provenance": {"complete": complete, "total": len(group)},
                 })
