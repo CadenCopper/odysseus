@@ -818,6 +818,9 @@ app.include_router(setup_compare_routes(session_manager))
 from routes.modelbench.modelbench_routes import setup_modelbench_routes
 app.include_router(setup_modelbench_routes())
 
+from services.modelbench.job_registry import BenchJobRegistry, reconcile_interrupted_jobs
+bench_job_registry = BenchJobRegistry()
+
 # User Preferences
 from routes.prefs_routes import setup_prefs_routes
 app.include_router(setup_prefs_routes())
@@ -1058,6 +1061,17 @@ async def _startup_event():
             _db.close()
     except Exception as e:
         logger.debug(f"Incognito purge skipped: {e}")
+    # Reconcile interrupted bench jobs from a previous process, then start the supervisor.
+    try:
+        _n = await reconcile_interrupted_jobs()
+        if _n:
+            logger.info(f"Reconciled {_n} interrupted bench job(s) -> failed")
+    except Exception as _e:
+        logger.debug(f"bench job reconcile skipped: {_e}")
+    try:
+        bench_job_registry.start_supervisor()
+    except Exception as _e:
+        logger.warning(f"bench supervisor start failed: {_e}")
     # Strong refs to fire-and-forget startup tasks. Without this, Python may
     # GC tasks created with `asyncio.create_task(...)` before they finish.
     _startup_tasks: list[asyncio.Task] = getattr(app.state, "_startup_tasks", [])
@@ -1301,6 +1315,10 @@ async def _shutdown_event():
         await mcp_manager.disconnect_all()
     except Exception as e:
         logger.warning(f"MCP shutdown error: {e}")
+    try:
+        await bench_job_registry.stop_supervisor()
+    except Exception as _e:
+        logger.warning(f"bench supervisor stop: {_e}")
     logger.info("Application shutdown complete")
 
 

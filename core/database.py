@@ -939,6 +939,34 @@ def _migrate_add_bench_sample_prompt_cols():
             pass
 
 
+class BenchJob(Base):
+    """Single-concurrency ModelBench in-dashboard test-run job.
+
+    Tracks the lifecycle of one GUI-triggered benchmark run (queued -> running
+    -> done|failed|cancelled). Consumed by the asyncio job registry in
+    services/modelbench/job_registry.py; only one job may be active at a time
+    (the 12GB GPU is single-tenant).
+    """
+    __tablename__ = "bench_jobs"
+
+    id = Column(String, primary_key=True, index=True)  # uuid
+    run_id = Column(String(64), nullable=True, index=True)  # samples-run key, set when run starts
+    status = Column(String(16), nullable=False, default="queued")  # queued|running|done|failed|cancelled
+    model_tag = Column(String(255), nullable=False)
+    think = Column(Boolean, nullable=True)
+    ctx_target = Column(Integer, nullable=True)
+    prompt = Column(Text, nullable=False)
+    n_samples = Column(Integer, nullable=False)
+    progress = Column(Float, nullable=False, default=0.0)  # 0..1
+    message = Column(Text, nullable=False, default="")
+    error = Column(Text, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=lambda: utcnow_naive())
+    updated_at = Column(DateTime, nullable=False, default=lambda: utcnow_naive(), onupdate=lambda: utcnow_naive())
+    heartbeat_at = Column(DateTime, nullable=True)
+
+    __table_args__ = (Index('ix_bench_jobs_status', 'status'),)
+
+
 def _migrate_add_last_message_at_column():
     """Add last_message_at to sessions + backfill from the latest message
     timestamp per session (fallback to last_accessed / created_at when a
