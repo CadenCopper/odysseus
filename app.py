@@ -821,6 +821,11 @@ app.include_router(setup_modelbench_routes())
 from services.modelbench.job_registry import BenchJobRegistry, reconcile_interrupted_jobs
 bench_job_registry = BenchJobRegistry()
 
+# Ollama-native runner endpoints (resident model list + streamed pull). Passed
+# the bench registry so a pull is refused while a bench run is active.
+from routes.modelbench.ollama_routes import setup_ollama_routes
+app.include_router(setup_ollama_routes(bench_registry=bench_job_registry))
+
 # User Preferences
 from routes.prefs_routes import setup_prefs_routes
 app.include_router(setup_prefs_routes())

@@ -161,6 +161,14 @@ class BenchJobRegistry:
         """Set (or replace) the async callable used to execute a job's run."""
         self._runner = runner
 
+    def has_active_run(self) -> bool:
+        """True when a bench run is queued or running.
+
+        The ollama pull route uses this to serialize pulls with bench runs:
+        no generation may be interrupted by a model pull hogging the GPU/disk.
+        """
+        return bool(self._running)
+
     async def submit(self, *, model_tag, think=None, ctx_target=None, prompt, n_samples) -> dict:
         """Create a queued BenchJob row and schedule its dispatch.
 
