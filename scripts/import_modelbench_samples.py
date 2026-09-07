@@ -5,12 +5,16 @@ ModelBench raw samples into the isolated `bench_samples` table
 (core.database.BenchSample).
 
 Reads a source `samples.db` (table `samples`, 18 columns, one row per
-benchmark request) and copies rows into a --target SQLite database's
-`bench_samples` table, normalizing a handful of source-specific encodings
-along the way: `think` as 0/1 -> bool, `vrram_fit` aliases -> the canonical
-fit/partial/offload enum, and the ISO-8601 `created_at` string -> a naive UTC
-datetime. All other columns copy verbatim; `true_params` is never derived
-from the model tag — it is read as-is from the source.
+benchmark request, plus optional `prompt_text`/`collector` pass-through
+columns that a GUI-triggered run may add) and copies rows into a --target
+SQLite database's `bench_samples` table, normalizing a handful of
+source-specific encodings along the way: `think` as 0/1 -> bool,
+`vrram_fit` aliases -> the canonical fit/partial/offload enum, and the
+ISO-8601 `created_at` string -> a naive UTC datetime. All other columns
+copy verbatim; `true_params` is never derived from the model tag — it is
+read as-is from the source. When the source lacks the optional
+`prompt_text`/`collector` columns, those rows land with NULL (never
+rejected).
 
 Isolation: this script NEVER reads or writes the app's global DATABASE_URL,
 core.database.engine, or core.database.SessionLocal. `core.database` is
@@ -42,8 +46,13 @@ SOURCE_COLUMNS = [
     "run_id", "model_tag", "true_params", "quant", "ctx_len", "think",
     "prompt_bytes", "temperature", "seed", "ollama_version", "vrram_fit",
     "output_tokens", "thinking_tokens", "content_tokens", "tokens_per_sec",
-    "ttft_ms", "latency_ms", "created_at",
+    "ttft_ms", "latency_ms", "created_at", "prompt_text", "collector",
 ]
+
+# These columns are pass-through on the BenchSample table but may be absent
+# from a legacy source `samples` table. When the source lacks them we select
+# NULL rather than rejecting the row (the importer must never fail on them).
+OPTIONAL_SOURCE_COLUMNS = {"prompt_text", "collector"}
 
 REQUIRED_KEYS = ("run_id", "model_tag", "true_params", "tokens_per_sec")
 
@@ -146,9 +155,19 @@ def _read_source_rows(source_path):
         existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(samples)")}
         missing = [c for c in SOURCE_COLUMNS if c not in existing_cols]
         if missing:
-            raise ValueError(f"source table `samples` is missing expected columns: {missing}")
-        cols_sql = ", ".join(SOURCE_COLUMNS)
-        return conn.execute(f"SELECT {cols_sql} FROM samples ORDER BY run_id").fetchall()
+            # Only the optional pass-through columns may be absent; any missing
+            # required column is a hard error (the source is the wrong shape).
+            truly_missing = [c for c in missing if c not in OPTIONAL_SOURCE_COLUMNS]
+            if truly_missing:
+                raise ValueError(f"source table `samples` is missing expected columns: {truly_missing}")
+        # Select all required columns verbatim; substitute NULL for any optional
+        # column the source lacks (preserving SOURCE_COLUMNS column order so the
+        # dict(zip(SOURCE_COLUMNS, raw)) in _transform_row lines up).
+        select_sql = ", ".join(
+            f"NULL AS {c}" if c not in existing_cols else c
+            for c in SOURCE_COLUMNS
+        )
+        return conn.execute(f"SELECT {select_sql} FROM samples ORDER BY run_id").fetchall()
     finally:
         conn.close()
 

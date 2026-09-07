@@ -893,11 +893,50 @@ class BenchSample(Base):
     ttft_ms = Column(Float, nullable=True)
     latency_ms = Column(Float, nullable=True)
     created_at = Column(DateTime, nullable=False, default=lambda: utcnow_naive())
+    # The literal prompt string a GUI-triggered run used, so the Minos G5 gate
+    # can re-run the identical prompt. Legacy imported rows resolve their prompt
+    # from fixed.jsonl by run_id and keep NULL here — do NOT backfill.
+    prompt_text = Column(Text, nullable=True)
+    # Per-row attribution: 'probe' | 'llm-load-test' | 'gui-runner'. Legacy rows
+    # leave NULL (never guess attribution).
+    collector = Column(String(32), nullable=True)
 
     __table_args__ = (
         Index('ix_bench_samples_model_tag', 'model_tag'),
         Index('ix_bench_samples_think', 'think'),
     )
+
+
+def _migrate_add_bench_sample_prompt_cols():
+    """Add `prompt_text` (Text) + `collector` (String(32)) to bench_samples.
+
+    Guarded + idempotent, following the house ALTER pattern: create_all() on a
+    fresh DB auto-adds the columns from the ORM, so this guard only needs to
+    cover the SQLite ALTER path when create_all misses an existing table. The
+    columns are nullable, so legacy rows keep NULL (no backfill).
+    """
+    import sqlite3
+    db_path = DATABASE_URL.replace("sqlite:///", "")
+    if not os.path.exists(db_path):
+        return
+    conn = None
+    try:
+        conn = sqlite3.connect(db_path)
+        cursor = conn.execute("PRAGMA table_info(bench_samples)")
+        columns = [row[1] for row in cursor.fetchall()]
+        if "prompt_text" not in columns:
+            conn.execute("ALTER TABLE bench_samples ADD COLUMN prompt_text TEXT")
+        if "collector" not in columns:
+            conn.execute("ALTER TABLE bench_samples ADD COLUMN collector VARCHAR(32)")
+        conn.commit()
+        logging.getLogger(__name__).info("Migrated: added prompt_text + collector to bench_samples")
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"bench_samples prompt_text/collector migration failed: {e}")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 
 def _migrate_add_last_message_at_column():
@@ -2182,6 +2221,7 @@ def init_db():
     _migrate_encrypt_signatures()
     _migrate_encrypt_endpoint_keys()
     _migrate_backfill_task_folders()
+    _migrate_add_bench_sample_prompt_cols()
 
 
 def _migrate_backfill_task_folders():

@@ -84,6 +84,40 @@ def _make_target_engine(tmp_path):
     return target_path, create_engine(f"sqlite:///{target_path}")
 
 
+def _make_source_db_with_optional(tmp_path):
+    """Source `samples` table including prompt_text/collector, with two rows
+    that carry distinct values (and one row leaving collector NULL) to prove
+    verbatim pass-through of the new optional columns."""
+    import scripts.import_modelbench_samples as imp
+    path = str(tmp_path / "samples_with_optional.db")
+    conn = sqlite3.connect(path)
+    # Reuse imp.SOURCE_COLUMNS (now includes prompt_text/collector) so the
+    # source schema matches the importer's expectations exactly.
+    cols_sql = ", ".join(imp.SOURCE_COLUMNS)
+    placeholders = ", ".join("?" for _ in imp.SOURCE_COLUMNS)
+    conn.execute(f"CREATE TABLE samples ({cols_sql})")
+    # 2 valid rows, distinct prompt_text / collector values.
+    base_cols = [c for c in imp.SOURCE_COLUMNS if c not in ("prompt_text", "collector")]
+    def row(run_id, model, prompt, collector):
+        # Fill the base columns with the same shape as SOURCE_ROWS[0] minus the
+        # prompt_text/collector that get appended explicitly.
+        values = [run_id, model, 8.0, "Q4_K_M", 8192, 1, 512, 0.7, 42, "0.4.0",
+                  "fit", 120, 40, 80, 35.2, 120.5, 900.0, "2026-09-04T19:05:21.375Z"]
+        ordered = dict(zip(base_cols, values))
+        ordered["prompt_text"] = prompt
+        ordered["collector"] = collector
+        return [ordered[c] for c in imp.SOURCE_COLUMNS]
+
+    rows = [
+        row("run-opt-1", "hf.co/models/model-a:Q4_K_M", "What is 2+2?", "gui-runner"),
+        row("run-opt-2", "hf.co/models/model-a:Q4_K_M", "Explain gravity.", None),
+    ]
+    conn.executemany(f"INSERT INTO samples ({cols_sql}) VALUES ({placeholders})", rows)
+    conn.commit()
+    conn.close()
+    return path
+
+
 def _fetch_all(engine):
     Session = sessionmaker(bind=engine)
     session = Session()
@@ -203,5 +237,51 @@ def test_token_columns_stay_separate_never_summed(tmp_path):
         assert defiant.thinking_tokens == 30
         assert defiant.content_tokens == 60
         assert defiant.output_tokens != defiant.thinking_tokens + defiant.content_tokens
+    finally:
+        engine.dispose()
+
+
+def test_import_passes_through_optional_columns_when_source_has_them(tmp_path):
+    source_path = _make_source_db_with_optional(tmp_path)
+    target_path, _ = _make_target_engine(tmp_path)
+
+    counts = run_import(source_path, target_path)
+    assert counts["source_read"] == 2
+    assert counts["inserted"] == 2
+    assert counts["failed"] == 0
+
+    engine = create_engine(f"sqlite:///{target_path}")
+    try:
+        rows = _fetch_all(engine)
+        r1 = rows["run-opt-1"]
+        assert r1.prompt_text == "What is 2+2?"
+        assert r1.collector == "gui-runner"
+        r2 = rows["run-opt-2"]
+        assert r2.prompt_text == "Explain gravity."
+        assert r2.collector is None  # source NULL stays NULL, verbatim
+    finally:
+        engine.dispose()
+
+
+def test_import_sets_optional_columns_null_when_source_lacks_them(tmp_path):
+    # `_make_source_db` builds a legacy 18-column source with NO
+    # prompt_text/collector columns — the importer must select NULL rather than
+    # reject every row (acceptance: source may lack the cols -> pass NULL).
+    source_path = _make_source_db(tmp_path)
+    target_path, _ = _make_target_engine(tmp_path)
+
+    counts = run_import(source_path, target_path)
+    assert counts["source_read"] == len(SOURCE_ROWS)
+    assert counts["inserted"] == VALID_ROW_COUNT
+    assert counts["failed"] == 1  # only the pre-existing bad-think row
+
+    engine = create_engine(f"sqlite:///{target_path}")
+    try:
+        rows = _fetch_all(engine)
+        assert len(rows) == VALID_ROW_COUNT
+        # New columns exist on the target table and are NULL for legacy rows.
+        for r in rows.values():
+            assert r.prompt_text is None
+            assert r.collector is None
     finally:
         engine.dispose()

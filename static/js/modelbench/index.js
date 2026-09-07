@@ -629,7 +629,7 @@ const _DRILLDOWN_FIELDS = [
   'run_id', 'model_tag', 'true_params', 'quant', 'ctx_len', 'think',
   'prompt_bytes', 'temperature', 'seed', 'ollama_version', 'vrram_fit',
   'output_tokens', 'thinking_tokens', 'content_tokens', 'tokens_per_sec',
-  'ttft_ms', 'latency_ms', 'created_at',
+  'ttft_ms', 'latency_ms', 'created_at', 'prompt_text', 'collector',
 ];
 
 function _fmtRaw(v) {

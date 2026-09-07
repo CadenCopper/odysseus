@@ -32,6 +32,8 @@ EXPECTED_COLUMNS = {
     "ttft_ms",
     "latency_ms",
     "created_at",
+    "prompt_text",
+    "collector",
 }
 
 
