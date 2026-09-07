@@ -24,7 +24,7 @@ import httpx
 
 from core import database as core_db
 from core.database import BenchJob, BenchSample
-from services.modelbench.job_registry import JobContext, decode_ctx_series
+from services.modelbench.job_registry import JobContext, decode_ctx_sweep
 
 logger = logging.getLogger(__name__)
 
@@ -248,19 +248,27 @@ def ctx_sweep_points(cap: int, max_probes: int = MAX_CTX_SWEEP_PROBES) -> list:
     return points[:max_probes]
 
 
-def resolve_sweep_points(series_raw, cap: int) -> list:
+def resolve_sweep_points(sweep_raw, cap: int) -> list:
     """Pick the ctx sweep points for run_bench's sweep loop.
 
-    When the BenchJob row carries a user-controllable ``ctx_series`` (JSON
-    list, already cap-validated at the runs API), the sweep uses exactly those
-    points. Otherwise it falls back to the backward-compatible doubling
-    sequence ``ctx_sweep_points(cap)``. Tolerates a missing/empty/malformed
-    value by degrading to the fallback.
+    When the BenchJob row carries a user-controllable ``ctx_sweep`` (JSON list
+    of ints), the sweep uses exactly those points -- sorted ascending, deduped,
+    each clamped to the model's effective ``cap``, and bounded to
+    ``MAX_CTX_SWEEP_PROBES`` entries. Otherwise it falls back to the
+    backward-compatible doubling sequence ``ctx_sweep_points(cap)``. Tolerates
+    a missing/empty/malformed value by degrading to the fallback.
     """
-    series = decode_ctx_series(series_raw)
-    if series:
-        return series
-    return ctx_sweep_points(cap)
+    sweep = decode_ctx_sweep(sweep_raw)
+    if not sweep:
+        return ctx_sweep_points(cap)
+    if cap and cap > 0:
+        norm = sorted({min(int(p), cap) for p in sweep if isinstance(p, int) and p >= 1})
+    else:
+        norm = sorted({int(p) for p in sweep if isinstance(p, int) and p >= 1})
+    norm = norm[:MAX_CTX_SWEEP_PROBES]
+    if not norm:
+        return ctx_sweep_points(cap)
+    return norm
 
 
 def sample_run_id(base_run_id: str, label: str) -> str:
@@ -453,7 +461,7 @@ async def run_bench(ctx: "JobContext", *, client: httpx.AsyncClient | None = Non
             model_tag = job.model_tag
             think_pref = job.think
             ctx_target_req = job.ctx_target
-            ctx_series_req = job.ctx_series
+            ctx_sweep_req = job.ctx_sweep
             prompt = job.prompt
             n_samples = job.n_samples
         finally:
@@ -513,9 +521,9 @@ async def run_bench(ctx: "JobContext", *, client: httpx.AsyncClient | None = Non
                     (i + 1) / (n_samples * 2), f"token test {i + 1}/{n_samples}"
                 )
 
-            # CTX SWEEP — uses the user-controllable ctx_series when the job
+            # CTX SWEEP — uses the user-controllable ctx_sweep when the job
             # carries one; otherwise the backward-compatible doubling fallback.
-            sweep_points = resolve_sweep_points(ctx_series_req, cap)
+            sweep_points = resolve_sweep_points(ctx_sweep_req, cap)
             baseline_fit = None
             for j, sweep_ctx_len in enumerate(sweep_points):
                 await ctx.check_cancelled()

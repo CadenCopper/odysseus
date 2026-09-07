@@ -41890,7 +41890,8 @@ body.settings-sidebar-resize-active {
   letter-spacing: 0.04em;
 }
 .modelbench-runner-row select,
-.modelbench-runner-row input[type="number"] {
+.modelbench-runner-row input[type="number"],
+.modelbench-runner-row input[type="text"] {
   background: var(--bg);
   color: var(--fg);
   border: 1px solid var(--border);
@@ -41900,7 +41901,13 @@ body.settings-sidebar-resize-active {
 }
 #mb-runner-model { flex: 1 1 auto; min-width: 160px; }
 #mb-runner-ctx { width: 90px; }
+#mb-runner-ctx-sweep { width: 160px; }
 #mb-runner-n { width: 60px; }
+.modelbench-runner-field-error {
+  font-size: 11px;
+  color: var(--red, #ff5555);
+  flex-basis: 100%;
+}
 .modelbench-runner-model-detail {
   font-size: 12px;
   opacity: 0.85;

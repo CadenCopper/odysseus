@@ -939,8 +939,8 @@ def _migrate_add_bench_sample_prompt_cols():
             pass
 
 
-def _migrate_add_bench_jobs_ctx_series_column():
-    """Add `ctx_series` (Text, JSON array) to bench_jobs.
+def _migrate_add_bench_jobs_ctx_sweep_column():
+    """Add `ctx_sweep` (Text, JSON array) to bench_jobs.
 
     Guarded + idempotent, following the house ALTER pattern: create_all() on a
     fresh DB auto-adds the column from the ORM, so this guard only needs to
@@ -957,12 +957,12 @@ def _migrate_add_bench_jobs_ctx_series_column():
         conn = sqlite3.connect(db_path)
         cursor = conn.execute("PRAGMA table_info(bench_jobs)")
         columns = [row[1] for row in cursor.fetchall()]
-        if "ctx_series" not in columns:
-            conn.execute("ALTER TABLE bench_jobs ADD COLUMN ctx_series TEXT")
+        if "ctx_sweep" not in columns:
+            conn.execute("ALTER TABLE bench_jobs ADD COLUMN ctx_sweep TEXT")
         conn.commit()
-        logging.getLogger(__name__).info("Migrated: added ctx_series to bench_jobs")
+        logging.getLogger(__name__).info("Migrated: added ctx_sweep to bench_jobs")
     except Exception as e:
-        logging.getLogger(__name__).warning(f"bench_jobs ctx_series migration failed: {e}")
+        logging.getLogger(__name__).warning(f"bench_jobs ctx_sweep migration failed: {e}")
     finally:
         try:
             conn.close()
@@ -987,10 +987,11 @@ class BenchJob(Base):
     think = Column(Boolean, nullable=True)
     ctx_target = Column(Integer, nullable=True)
     # User-controllable ctx-window sweep SERIES (card MB-Dash-3b). A JSON
-    # array of integer ctx lengths the runner uses verbatim for the sweep
-    # loop; NULL/absent keeps the backward-compatible ctx_sweep_points(cap)
-    # doubling fallback. Serialized by job_registry encode/decode helpers.
-    ctx_series = Column(Text, nullable=True)
+    # array of integer ctx lengths the runner uses for the sweep loop (sorted,
+    # deduped, clamped to the model cap); NULL/absent keeps the backward-
+    # compatible ctx_sweep_points(cap) doubling fallback. Serialized by
+    # job_registry encode/decode helpers.
+    ctx_sweep = Column(Text, nullable=True)
     prompt = Column(Text, nullable=False)
     n_samples = Column(Integer, nullable=False)
     progress = Column(Float, nullable=False, default=0.0)  # 0..1
@@ -2286,7 +2287,7 @@ def init_db():
     _migrate_encrypt_endpoint_keys()
     _migrate_backfill_task_folders()
     _migrate_add_bench_sample_prompt_cols()
-    _migrate_add_bench_jobs_ctx_series_column()
+    _migrate_add_bench_jobs_ctx_sweep_column()
 
 
 def _migrate_backfill_task_folders():

@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 # heartbeat_at are required; job_id + the submitted params are fine to include.
 _POLL_FIELDS = (
     "job_id", "status", "progress", "message", "run_id", "error",
-    "heartbeat_at", "model_tag", "think", "ctx_target", "ctx_series",
+    "heartbeat_at", "model_tag", "think", "ctx_target", "ctx_sweep",
     "n_samples",
 )
 
@@ -97,19 +97,19 @@ def _validate_start_body(body: dict) -> None:
         if ctx_target < 1:
             raise _bad_request("ctx_target must be >= 1")
 
-    ctx_series = body.get("ctx_series")
-    if ctx_series is not None:
-        if not isinstance(ctx_series, list):
-            raise _bad_request("ctx_series must be a list of integers")
-        if len(ctx_series) > MAX_CTX_SWEEP_PROBES:
+    ctx_sweep = body.get("ctx_sweep")
+    if ctx_sweep is not None:
+        if not isinstance(ctx_sweep, list):
+            raise _bad_request("ctx_sweep must be a list of integers")
+        if len(ctx_sweep) > MAX_CTX_SWEEP_PROBES:
             raise _bad_request(
-                f"ctx_series must have at most {MAX_CTX_SWEEP_PROBES} points"
+                f"ctx_sweep must have at most {MAX_CTX_SWEEP_PROBES} points"
             )
-        for i, point in enumerate(ctx_series):
+        for i, point in enumerate(ctx_sweep):
             if not isinstance(point, int) or isinstance(point, bool):
-                raise _bad_request(f"ctx_series[{i}] must be an integer")
+                raise _bad_request(f"ctx_sweep[{i}] must be an integer")
             if point < 1:
-                raise _bad_request(f"ctx_series[{i}] must be >= 1")
+                raise _bad_request(f"ctx_sweep[{i}] must be >= 1")
 
 
 def setup_runs_routes(
@@ -144,30 +144,30 @@ def setup_runs_routes(
         think = body["think"]
         n_samples = body["n_samples"]
         ctx_target = body.get("ctx_target")
-        ctx_series = body.get("ctx_series")
+        ctx_sweep = body.get("ctx_sweep")
 
         resident = await _resolve_resident_model(factory, model_tag)
 
-        if ctx_target is not None or ctx_series is not None:
+        if ctx_target is not None or ctx_sweep is not None:
             details = resident.get("details") or {}
             cap = effective_ctx_cap(model_tag, details.get("context_length"))
             if ctx_target is not None and ctx_target > cap:
                 raise _bad_request(
                     f"ctx_target {ctx_target} exceeds the model's safety cap ({cap})"
                 )
-            if ctx_series is not None:
-                for point in ctx_series:
-                    if point > cap:
-                        raise _bad_request(
-                            f"ctx_series point {point} exceeds the model's safety cap ({cap})"
-                        )
+            # Over-cap sweep points are CLAMPED to the model's effective cap
+            # (not rejected) so an explicit series is honoured as far as the
+            # model can go. Structural validation (ints >= 1, <= max probes)
+            # already ran in _validate_start_body.
+            if ctx_sweep is not None:
+                ctx_sweep = [min(point, cap) for point in ctx_sweep]
 
         try:
             job = await bench_registry.submit(
                 model_tag=model_tag,
                 think=think,
                 ctx_target=ctx_target,
-                ctx_series=ctx_series,
+                ctx_sweep=ctx_sweep,
                 prompt=prompt,
                 n_samples=n_samples,
             )

@@ -153,6 +153,22 @@ export function modelsTableHtml(models = [], activeModel) {
 }
 
 /**
+ * Optional "Context sweep points" runner-form field: a comma-separated ctx
+ * list input plus an inline error span that index.js fills in on
+ * client-side validation failure (parseCtxSweep in format.js). Mirrors the
+ * #mb-runner-ctx label+input row conventions in index.js `_mountPanel`. No
+ * inline event-handler attributes — index.js wires the `input` listener via
+ * addEventListener (CSP contract, see header note).
+ */
+export function ctxSweepFieldHtml({ placeholder = '' } = {}) {
+  return '<div class="modelbench-runner-row">' +
+    '<label class="modelbench-runner-label" for="mb-runner-ctx-sweep">Context sweep points</label>' +
+    `<input type="text" id="mb-runner-ctx-sweep" inputmode="numeric" placeholder="${esc(placeholder)}" autocomplete="off" />` +
+    '<span id="mb-runner-ctx-sweep-error" role="alert" class="modelbench-runner-field-error" hidden></span>' +
+    '</div>';
+}
+
+/**
  * A metric block (label + DOM bar rows) for one per-model metric, e.g.
  * Tokens/sec / TTFT / Latency. `tipKey` selects the metric's tooltip copy;
  * `fmt` formats the numeric values.

@@ -46,7 +46,7 @@ def cleanup(engine, tmpfile):
 
 
 def make_job(session_local, *, model_tag="test-model:latest", think=None,
-             ctx_target=None, ctx_series=None, prompt="Say hello.", n_samples=2):
+             ctx_target=None, ctx_sweep=None, prompt="Say hello.", n_samples=2):
     db = session_local()
     try:
         job = BenchJob(
@@ -56,7 +56,7 @@ def make_job(session_local, *, model_tag="test-model:latest", think=None,
             model_tag=model_tag,
             think=think,
             ctx_target=ctx_target,
-            ctx_series=ctx_series,
+            ctx_sweep=ctx_sweep,
             prompt=prompt,
             n_samples=n_samples,
             progress=0.0,
@@ -218,6 +218,23 @@ def test_resolve_sweep_points_falls_back_when_absent():
     assert runner.resolve_sweep_points("", 2048) == runner.ctx_sweep_points(2048)
     assert runner.resolve_sweep_points("not json", 2048) == runner.ctx_sweep_points(2048)
     assert runner.resolve_sweep_points("{}", 2048) == runner.ctx_sweep_points(2048)
+
+
+def test_resolve_sweep_points_sorts_dedupes_and_clamps_each_point():
+    # A user series is normalized: sorted ascending, deduped, and every point
+    # clamped to the model's effective cap (MB-Dash-3b decision 2).
+    assert runner.resolve_sweep_points("[768, 512, 768, 99999]", 2048) == [512, 768, 2048]
+    # Over-cap entries collapse onto the cap rather than being dropped.
+    assert runner.resolve_sweep_points("[99999]", 4096) == [4096]
+    # Cap not exceeded -> points pass through sorted + deduped.
+    assert runner.resolve_sweep_points("[4096, 1024, 2048, 1024]", 8192) == [1024, 2048, 4096]
+
+
+def test_resolve_sweep_points_is_bounded_to_max_probes():
+    raw = "[" + ",".join(str(1024 * i) for i in range(1, 30)) + "]"
+    out = runner.resolve_sweep_points(raw, 1_000_000)
+    assert len(out) <= runner.MAX_CTX_SWEEP_PROBES
+    assert out == sorted(out)
 
 
 # ---------------------------------------------------------------------------
@@ -623,13 +640,13 @@ async def test_content_templated_model_records_requested_think_class(monkeypatch
 # User-controllable ctx sweep series (MB-Dash-3b)
 # ---------------------------------------------------------------------------
 
-async def test_run_bench_uses_provided_ctx_series_for_sweep(monkeypatch):
-    """A job carrying a user ctx_series runs the sweep loop at exactly those
+async def test_run_bench_uses_provided_ctx_sweep_for_sweep(monkeypatch):
+    """A job carrying a user ctx_sweep runs the sweep loop at exactly those
     points (no implicit doubling) -- acceptance (d)."""
     session_local, engine, tmpfile = make_db(monkeypatch)
     try:
         # n_samples=1 token test, then the user's sweep [512, 768].
-        job_id = make_job(session_local, ctx_series="[512, 768]", n_samples=1)
+        job_id = make_job(session_local, ctx_sweep="[512, 768]", n_samples=1)
         ctx = make_ctx(job_id)
 
         num_ctx_calls = []
@@ -652,12 +669,12 @@ async def test_run_bench_uses_provided_ctx_series_for_sweep(monkeypatch):
         cleanup(engine, tmpfile)
 
 
-async def test_run_bench_without_ctx_series_uses_doubling_fallback(monkeypatch):
-    """A job without ctx_series keeps the backward-compatible ctx_sweep_points
+async def test_run_bench_without_ctx_sweep_uses_doubling_fallback(monkeypatch):
+    """A job without ctx_sweep keeps the backward-compatible ctx_sweep_points
     sweep -- acceptance (e)."""
     session_local, engine, tmpfile = make_db(monkeypatch)
     try:
-        job_id = make_job(session_local, n_samples=1)  # no ctx_series
+        job_id = make_job(session_local, n_samples=1)  # no ctx_sweep
         ctx = make_ctx(job_id)
 
         num_ctx_calls = []

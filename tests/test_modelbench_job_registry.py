@@ -32,7 +32,7 @@ EXPECTED_COLUMNS = {
     "model_tag",
     "think",
     "ctx_target",
-    "ctx_series",
+    "ctx_sweep",
     "prompt",
     "n_samples",
     "progress",

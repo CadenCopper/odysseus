@@ -71,6 +71,32 @@ def test_update_database_script_untouched():
     assert result.returncode == 0
 
 
+def test_bench_jobs_table_has_ctx_sweep_column():
+    """MB-Dash-3b: bench_jobs gains an optional ctx_sweep (Text, JSON array).
+
+    NULL/absent keeps the backward-compatible ctx_sweep_points(cap) doubling
+    sweep; the column must be nullable and present on a fresh create_all().
+    """
+    session_local, engine, tmpfile = make_temp_sqlite(Base.metadata)
+    try:
+        inspector = inspect(engine)
+        assert "bench_jobs" in inspector.get_table_names()
+        columns = {col["name"] for col in inspector.get_columns("bench_jobs")}
+        required = {
+            "id", "status", "model_tag", "think", "ctx_target",
+            "ctx_sweep", "prompt", "n_samples",
+        }
+        assert required <= columns, f"missing columns: {required - columns}"
+        ctx_sweep = next(
+            col for col in inspector.get_columns("bench_jobs")
+            if col["name"] == "ctx_sweep"
+        )
+        assert ctx_sweep["nullable"] is True
+    finally:
+        engine.dispose()
+        Path(tmpfile.name).unlink(missing_ok=True)
+
+
 def test_init_db_creates_bench_samples_on_fresh_db_and_is_re_runnable():
     """Acceptance (1)+(3): a fresh SQLite DB initialized via init_db() has the
     modelbench table, and init_db() is re-runnable/idempotent (run twice)."""

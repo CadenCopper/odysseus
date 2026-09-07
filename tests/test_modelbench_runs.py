@@ -233,62 +233,69 @@ def test_start_run_rejects_ctx_target_over_cap(registry, single_user):
     assert "ctx_target" in r.text.lower()
 
 
-def test_start_run_accepts_and_persists_ctx_series(registry, single_user):
-    """(a) A user ctx_series is accepted and persisted (JSON) on the row."""
+def test_start_run_accepts_and_persists_ctx_sweep(registry, single_user):
+    """(a) A user ctx_sweep is accepted and persisted (JSON) on the row."""
     reg, session_local = registry
     c = _client(reg, [_resident("test-model:latest")])
-    body = {**VALID_BODY, "ctx_series": [1024, 2048, 4096]}
+    body = {**VALID_BODY, "ctx_sweep": [1024, 2048, 4096]}
     r = c.post("/api/modelbench/runs", json=body)
     assert r.status_code == 201
-    assert r.json()["ctx_series"] == [1024, 2048, 4096]
+    assert r.json()["ctx_sweep"] == [1024, 2048, 4096]
     job_id = r.json()["job_id"]
     db = session_local()
     try:
         row = db.query(BenchJob).filter(BenchJob.id == job_id).first()
     finally:
         db.close()
-    assert row.ctx_series is not None
-    assert json.loads(row.ctx_series) == [1024, 2048, 4096]
+    assert row.ctx_sweep is not None
+    assert json.loads(row.ctx_sweep) == [1024, 2048, 4096]
 
 
-def test_start_run_rejects_ctx_series_point_over_cap(registry, single_user):
-    """(b) A single point > the effective cap -> 400 with a clear message."""
-    reg, _ = registry
+def test_start_run_clamps_ctx_sweep_point_over_cap(registry, single_user):
+    """(b) A point > the effective cap is CLAMPED to the cap (not rejected) --
+    an explicit series is honoured as far as the model can go (MB-Dash-3b)."""
+    reg, session_local = registry
     # LOW_CTX_CAP=8192 for test-model; 100000 exceeds it.
     c = _client(reg, [_resident("test-model:latest", context_length=262144)])
-    body = {**VALID_BODY, "ctx_series": [1024, 100000]}
+    body = {**VALID_BODY, "ctx_sweep": [1024, 100000]}
     r = c.post("/api/modelbench/runs", json=body)
-    assert r.status_code == 400
-    assert "safety cap" in r.text.lower()
-    assert "100000" in r.text
+    assert r.status_code == 201
+    assert r.json()["ctx_sweep"] == [1024, 8192]
+    job_id = r.json()["job_id"]
+    db = session_local()
+    try:
+        row = db.query(BenchJob).filter(BenchJob.id == job_id).first()
+    finally:
+        db.close()
+    assert json.loads(row.ctx_sweep) == [1024, 8192]
 
 
-def test_start_run_rejects_ctx_series_over_max_probes(registry, single_user):
-    """(c) len(ctx_series) > MAX_CTX_SWEEP_PROBES -> 400."""
+def test_start_run_rejects_ctx_sweep_over_max_probes(registry, single_user):
+    """(c) len(ctx_sweep) > MAX_CTX_SWEEP_PROBES -> 400."""
     reg, _ = registry
     c = _client(reg, [_resident("test-model:latest")])
-    body = {**VALID_BODY, "ctx_series": list(range(1, 14))}  # 13 points > 12
+    body = {**VALID_BODY, "ctx_sweep": list(range(1, 14))}  # 13 points > 12
     r = c.post("/api/modelbench/runs", json=body)
     assert r.status_code == 400
-    assert "ctx_series" in r.text.lower()
+    assert "ctx_sweep" in r.text.lower()
 
 
 @pytest.mark.parametrize("bad_series", [[1024, "big"], [1024, True]])
-def test_start_run_rejects_non_integer_ctx_series_point(registry, single_user, bad_series):
+def test_start_run_rejects_non_integer_ctx_sweep_point(registry, single_user, bad_series):
     reg, _ = registry
     c = _client(reg, [_resident("test-model:latest")])
-    r = c.post("/api/modelbench/runs", json={**VALID_BODY, "ctx_series": bad_series})
+    r = c.post("/api/modelbench/runs", json={**VALID_BODY, "ctx_sweep": bad_series})
     assert r.status_code == 400
-    assert "ctx_series" in r.text.lower()
+    assert "ctx_sweep" in r.text.lower()
 
 
 @pytest.mark.parametrize("bad_series", [[0, 1024], [-5]])
-def test_start_run_rejects_non_positive_ctx_series_point(registry, single_user, bad_series):
+def test_start_run_rejects_non_positive_ctx_sweep_point(registry, single_user, bad_series):
     reg, _ = registry
     c = _client(reg, [_resident("test-model:latest")])
-    r = c.post("/api/modelbench/runs", json={**VALID_BODY, "ctx_series": bad_series})
+    r = c.post("/api/modelbench/runs", json={**VALID_BODY, "ctx_sweep": bad_series})
     assert r.status_code == 400
-    assert "ctx_series" in r.text.lower()
+    assert "ctx_sweep" in r.text.lower()
 
 
 @pytest.mark.parametrize("bad_think", ["true", None, "null"])
@@ -364,18 +371,18 @@ def test_poll_reflects_terminal_status(registry, single_user):
     assert r.json()["status"] == "done"
 
 
-def test_poll_reflects_ctx_series(registry, single_user):
-    """The submitted ctx_series is surfaced in the poll JSON (_POLL_FIELDS)."""
+def test_poll_reflects_ctx_sweep(registry, single_user):
+    """The submitted ctx_sweep is surfaced in the poll JSON (_POLL_FIELDS)."""
     reg, session_local = registry
     c = _client(reg, [_resident("test-model:latest")])
     started = c.post(
-        "/api/modelbench/runs", json={**VALID_BODY, "ctx_series": [1024, 2048]}
+        "/api/modelbench/runs", json={**VALID_BODY, "ctx_sweep": [1024, 2048]}
     ).json()
     job_id = started["job_id"]
     _set_row(session_local, job_id, status="running")
     r = c.get(f"/api/modelbench/runs/{job_id}")
     assert r.status_code == 200
-    assert r.json()["ctx_series"] == [1024, 2048]
+    assert r.json()["ctx_sweep"] == [1024, 2048]
 
 
 def test_poll_unknown_job_returns_404(registry, single_user):

@@ -5,8 +5,8 @@
 // has no minimize-to-chip state — closing removes it entirely.
 
 import state, { reset } from './state.js';
-import { fmtTps, fmtMs, fmtCtx, fitColor } from './format.js';
-import { modelsTableHtml, metricBlockHtml } from './markup.js';
+import { fmtTps, fmtMs, fmtCtx, fitColor, parseCtxSweep, ctxSweepDefaultPreview } from './format.js';
+import { modelsTableHtml, metricBlockHtml, ctxSweepFieldHtml } from './markup.js';
 import { modelsUrl, metricsUrl, samplesUrl, sampleUrl, runsUrl, runUrl, runCancelUrl, ollamaModelsUrl, pullUrl } from './api.js';
 import { createRunner, isTerminal, progressPct, pullProgressPct } from './runner.js';
 import { makeWindowDraggable } from '../windowDrag.js';
@@ -296,6 +296,7 @@ function _mountPanel() {
             <label class="modelbench-runner-label" for="mb-runner-n">Samples</label>
             <input type="number" id="mb-runner-n" min="1" max="20" value="5" />
           </div>
+          ${ctxSweepFieldHtml({ placeholder: ctxSweepDefaultPreview(null) })}
           <textarea id="mb-runner-prompt" class="modelbench-runner-prompt" rows="2" aria-label="Prompt">Write a haiku about context windows</textarea>
           <div class="modelbench-runner-row modelbench-runner-row-end">
             <span id="mb-runner-prompt-bytes" class="modelbench-runner-meta"></span>
@@ -607,6 +608,10 @@ function _wireRunnerEvents(panel) {
   panel.querySelector('#mb-runner-pull-btn')?.addEventListener('click', _onRunnerPullClick);
   panel.querySelector('#mb-runner-model')?.addEventListener('change', _onRunnerModelSelected);
   panel.querySelector('#mb-runner-prompt')?.addEventListener('input', _updatePromptBytes);
+  panel.querySelector('#mb-runner-ctx-sweep')?.addEventListener('input', () => {
+    const errEl = document.getElementById('mb-runner-ctx-sweep-error');
+    if (errEl) { errEl.hidden = true; errEl.textContent = ''; }
+  });
 
   const thinkToggle = panel.querySelector('#mb-runner-think-toggle');
   thinkToggle?.addEventListener('click', (e) => {
@@ -660,6 +665,7 @@ function _onRunnerModelSelected() {
   const detail = document.getElementById('mb-runner-model-detail');
   const pullBtn = document.getElementById('mb-runner-pull-btn');
   const ctxInput = document.getElementById('mb-runner-ctx');
+  const ctxSweepInput = document.getElementById('mb-runner-ctx-sweep');
   const tag = select?.value || '';
   const resident = _selectedResidentModel();
   if (detail) {
@@ -674,6 +680,7 @@ function _onRunnerModelSelected() {
     }
   }
   if (ctxInput) ctxInput.placeholder = resident?.context_length ? `max ${resident.context_length}` : 'optional';
+  if (ctxSweepInput) ctxSweepInput.placeholder = ctxSweepDefaultPreview(resident?.context_length ?? null);
   if (pullBtn) pullBtn.style.display = tag && !resident ? '' : 'none';
 }
 
@@ -689,11 +696,19 @@ async function _onRunnerSubmit(e) {
   e.preventDefault();
   const select = document.getElementById('mb-runner-model');
   const ctxInput = document.getElementById('mb-runner-ctx');
+  const ctxSweepInput = document.getElementById('mb-runner-ctx-sweep');
+  const ctxSweepError = document.getElementById('mb-runner-ctx-sweep-error');
   const nInput = document.getElementById('mb-runner-n');
   const promptTa = document.getElementById('mb-runner-prompt');
   const modelTag = select?.value || '';
   if (!modelTag) {
     _showError('Select a model to run');
+    return;
+  }
+  const cap = _selectedResidentModel()?.context_length ?? null;
+  const { points, error } = parseCtxSweep(ctxSweepInput?.value || '', cap);
+  if (error) {
+    if (ctxSweepError) { ctxSweepError.textContent = error; ctxSweepError.hidden = false; }
     return;
   }
   const params = {
@@ -704,6 +719,7 @@ async function _onRunnerSubmit(e) {
   };
   const ctxVal = ctxInput?.value ? parseInt(ctxInput.value, 10) : NaN;
   if (Number.isFinite(ctxVal)) params.ctx_target = ctxVal;
+  if (points) params.ctx_sweep = points;
   try {
     await _runner.start(params);
   } catch (err) {

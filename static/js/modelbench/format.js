@@ -47,3 +47,51 @@ export function barPct(value, maxValue) {
   if (!maxValue || maxValue <= 0) return 0;
   return Math.min(100, Math.round((value / maxValue) * 100));
 }
+
+/**
+ * Parse the runner's optional "Context sweep points" field into a validated
+ * int list, mirroring the server's ctx_sweep rules (routes/modelbench).
+ * Blank/whitespace/null input means "omit ctx_sweep" -> backend default
+ * doubling sweep: { points: null, error: null }. `cap` is the effective ctx
+ * cap (e.g. the selected resident model's context_length); pass null/undefined
+ * to skip the cap check client-side (the server still enforces it).
+ */
+export function parseCtxSweep(raw, cap, maxProbes = 12) {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return { points: null, error: null };
+  const tokens = trimmed.split(',').map((t) => t.trim());
+  const points = [];
+  for (const tok of tokens) {
+    if (!/^-?\d+$/.test(tok)) {
+      return { points: null, error: `"${tok}" is not a whole number` };
+    }
+    const n = parseInt(tok, 10);
+    if (n < 1) {
+      return { points: null, error: `"${tok}" must be at least 1` };
+    }
+    if (cap !== null && cap !== undefined && n > cap) {
+      return { points: null, error: `"${tok}" exceeds the max context length (${cap})` };
+    }
+    points.push(n);
+  }
+  if (points.length > maxProbes) {
+    return { points: null, error: `Too many context points (${points.length}); max is ${maxProbes}` };
+  }
+  return { points, error: null };
+}
+
+/**
+ * Deterministic doubling-default preview (1024, 2048, 4096, ...) for the
+ * ctx-sweep field placeholder, bounded to a short readable string. Mirrors
+ * the backend's ctx_sweep_points(cap) shape without duplicating its cap logic.
+ */
+export function ctxSweepDefaultPreview(cap) {
+  const c = Number(cap);
+  if (!Number.isFinite(c) || c <= 0) return '1024,2048,4096,…';
+  if (c < 1024) return String(Math.round(c));
+  const points = [1024];
+  while (points.length < 12 && points[points.length - 1] * 2 <= c) {
+    points.push(points[points.length - 1] * 2);
+  }
+  return points.length <= 4 ? points.join(',') : points.slice(0, 3).join(',') + ',…';
+}

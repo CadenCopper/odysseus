@@ -648,6 +648,97 @@ def test_modelbench_markup_no_inline_handlers_or_scripts(node_available):
         "external script src injected"
 
 
+# ── ctx-sweep (runner form) ──────────────────────────────────────
+# parseCtxSweep (format.js) / ctxSweepFieldHtml (markup.js) back the
+# optional "Context sweep points" runner field wired in index.js
+# _onRunnerSubmit. Blank input means "omit ctx_sweep -> backend default
+# sweep"; any parse/range/count violation blocks the POST client-side.
+
+def test_ctx_sweep_field_renders_input(node_available):
+    script = textwrap.dedent("""
+        const { ctxSweepFieldHtml } = await import('./static/js/modelbench/markup.js');
+        const html = ctxSweepFieldHtml({ placeholder: '1024,2048,4096,…' });
+        console.log(JSON.stringify({ html }));
+    """)
+    html = _run_node(script)["html"]
+    assert 'id="mb-runner-ctx-sweep"' in html
+    assert 'Context sweep points' in html
+    assert '1024,2048,4096,…' in html
+    assert 'id="mb-runner-ctx-sweep-error"' in html
+    assert re.search(r"\son\w+\s*=\s*['\"]", html, re.I) is None
+    assert "<script" not in html
+
+
+def test_parse_ctx_sweep_valid(node_available):
+    script = textwrap.dedent("""
+        const { parseCtxSweep } = await import('./static/js/modelbench/format.js');
+        console.log(JSON.stringify({
+          plain: parseCtxSweep("1024,2048,4096", 8192),
+          spaced: parseCtxSweep(" 1024, 2048 ,4096 ", 8192),
+        }));
+    """)
+    out = _run_node(script)
+    for key in ("plain", "spaced"):
+        assert out[key] == {"points": [1024, 2048, 4096], "error": None}, out[key]
+
+
+def test_parse_ctx_sweep_blank_defaults(node_available):
+    script = textwrap.dedent("""
+        const { parseCtxSweep } = await import('./static/js/modelbench/format.js');
+        console.log(JSON.stringify({
+          empty: parseCtxSweep("", 8192),
+          whitespace: parseCtxSweep("   ", 8192),
+          nullish: parseCtxSweep(null, 8192),
+        }));
+    """)
+    out = _run_node(script)
+    for key in ("empty", "whitespace", "nullish"):
+        assert out[key] == {"points": None, "error": None}, out[key]
+
+
+def test_parse_ctx_sweep_rejects_out_of_range(node_available):
+    script = textwrap.dedent("""
+        const { parseCtxSweep } = await import('./static/js/modelbench/format.js');
+        console.log(JSON.stringify({
+          over_cap: parseCtxSweep("1024,99999", 8192),
+          zero: parseCtxSweep("0", 8192),
+          negative: parseCtxSweep("1024,-5", 8192),
+          non_numeric: parseCtxSweep("abc", 8192),
+          float_token: parseCtxSweep("1024.5", 8192),
+        }));
+    """)
+    out = _run_node(script)
+    for key, val in out.items():
+        assert val["points"] is None, f"{key} should reject: {val}"
+        assert val["error"] and isinstance(val["error"], str), f"{key} must carry a human-readable error"
+
+
+def test_parse_ctx_sweep_rejects_too_many_points(node_available):
+    script = textwrap.dedent("""
+        const { parseCtxSweep } = await import('./static/js/modelbench/format.js');
+        const raw = Array.from({ length: 13 }, (_, i) => 1024 + i).join(',');
+        console.log(JSON.stringify(parseCtxSweep(raw, 100000)));
+    """)
+    out = _run_node(script)
+    assert out["points"] is None
+    assert out["error"]
+
+
+def test_runner_submit_wires_comma_series_to_params_ctx_sweep(node_available):
+    # Source-level wire-contract guard (index.js is DOM-heavy and not importable
+    # in node, so we pin the submit mapping + field wiring by source scan — the
+    # same technique as the tooltip/source-injection guards below). The GUI must
+    # send the comma-separated series as params.ctx_sweep and never the stale
+    # ctx_series name (MB-Dash-3b canonical contract).
+    src = (_REPO / "static/js/modelbench" / "index.js").read_text(encoding="utf-8")
+    assert "params.ctx_sweep = points" in src
+    assert "params.ctx_series" not in src
+    # The field is wired by id and parsed through parseCtxSweep.
+    assert "getElementById('mb-runner-ctx-sweep')" in src
+    assert "parseCtxSweep(" in src
+    assert "ctx_series" not in src
+
+
 def test_modelbench_js_source_has_no_script_injection_or_inline_handlers(node_available):
     # Source-level guard: the modelbench frontend files we touch must not grow
     # script injection or inline HTML event-handler attributes (CSP contract).
